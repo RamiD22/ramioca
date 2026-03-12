@@ -609,6 +609,13 @@ async def get_pnl_history(agent_id: str, limit: int = 500):
     return {"agent": agent_id, "snapshots": data}
 
 
+@app.get("/api/polymarket/trades")
+async def get_polymarket_trades():
+    """Fetch actual trades from Polymarket Data API."""
+    trades = polymarket.get_trades()
+    return {"trades": trades}
+
+
 @app.post("/api/bot/start")
 async def start_bot():
     global bot_running

@@ -50,9 +50,8 @@ TF_WEIGHTS_5M = {
 # Minimum edge required to trade (2% — filters noise while allowing real signals)
 MIN_EDGE = 0.02
 
-# Cooldown: minimum seconds between trades to avoid correlated signals
-# 1s allows agents to trade every cycle on 5-min windows
-MIN_TRADE_INTERVAL = 1
+# Cooldown: minimum seconds between trades
+MIN_TRADE_INTERVAL = 2
 
 # Default strategy state for backward compatibility (backtest, single-agent mode)
 _default_last_trade_time: float = 0.0

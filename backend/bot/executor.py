@@ -35,8 +35,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Cooldown between orders on the SAME token.
-# 1s cooldown — trade every cycle on 5-min windows
-_ORDER_COOLDOWN_5M = 1     # 1 second — allows rapid scaling in
+# 2s cooldown — trade every other cycle on 5-min windows
+_ORDER_COOLDOWN_5M = 2
 _ORDER_COOLDOWN_DEFAULT = 180  # 3 minutes for standard markets
 
 

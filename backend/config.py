@@ -34,7 +34,7 @@ class Settings:
     MIN_VOLUME_24H: float = float(os.getenv("POLYMARKET_AGENT_MIN_VOLUME24H_USDC", "2500"))
 
     # Bot settings
-    POLL_INTERVAL: int = int(os.getenv("POLYMARKET_AGENT_INTERVAL_SECONDS", "2"))
+    POLL_INTERVAL: int = int(os.getenv("POLYMARKET_AGENT_INTERVAL_SECONDS", "1"))
     DRY_RUN: bool = os.getenv("DRY_RUN", "true").lower() == "true"
     AUTOTRADE: bool = os.getenv("POLYMARKET_AGENT_AUTOTRADE", "true").lower() == "true"
 

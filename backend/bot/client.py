@@ -125,14 +125,20 @@ class PolymarketClient:
 
     def get_price(self, token_id: str, side: str = "BUY") -> float:
         resp = self._retry(lambda: self.client.get_price(token_id, side))
+        if isinstance(resp, dict):
+            return float(resp.get("price", 0))
         return float(resp) if resp else 0.0
 
     def get_midpoint(self, token_id: str) -> float:
         resp = self._retry(lambda: self.client.get_midpoint(token_id))
+        if isinstance(resp, dict):
+            return float(resp.get("mid", resp.get("price", 0)))
         return float(resp) if resp else 0.0
 
     def get_tick_size(self, token_id: str) -> float:
         resp = self._retry(lambda: self.client.get_tick_size(token_id))
+        if isinstance(resp, dict):
+            return float(resp.get("minimum_tick_size", resp.get("tick_size", 0.01)))
         return float(resp) if resp else 0.01
 
     # -- Trading --

@@ -35,9 +35,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Cooldown between orders on the SAME token.
-# Poll every 2s for fast signal detection, but only order every 30s per market.
-# 30s ≈ max 10 orders per window per agent → fits within $250 budget.
-_ORDER_COOLDOWN_5M = 30    # 30 seconds per market (detect fast, trade smart)
+# 1s cooldown — trade every cycle on 5-min windows
+_ORDER_COOLDOWN_5M = 1     # 1 second — allows rapid scaling in
 _ORDER_COOLDOWN_DEFAULT = 180  # 3 minutes for standard markets
 
 
@@ -163,6 +162,11 @@ class Executor:
         for pos in self.state.positions:
             if pos.current_price <= 0:
                 continue  # Skip resolved positions
+
+            # ── Skip already-resolved positions (at $0 or $1) ──
+            # These tokens have settled — the orderbook no longer exists
+            if pos.current_price >= 0.95 or pos.current_price <= 0.05:
+                continue
 
             # ── Skip if recovery value is too low ──
             # For binary markets at < $0.15, holding gives better EV than selling

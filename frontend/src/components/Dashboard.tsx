@@ -21,7 +21,7 @@ function formatUptime(seconds: number): string {
 }
 
 export default function Dashboard({ state, connected, onCommand, pnlHistory }: Props) {
-  const { alpha, beta, bot_status, markets } = state
+  const { alpha, beta, bot_status, markets: _markets } = state
 
   // Merge signals from both agents for the market scanner
   const allSignals = [...(alpha?.signals || []), ...(beta?.signals || [])]

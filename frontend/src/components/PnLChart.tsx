@@ -156,7 +156,7 @@ export default function PnLChart({ trades, history, gradientId = "pnlGradient", 
                 fontFamily: "monospace",
                 fontSize: 11,
               }}
-              formatter={(value: number) => [`$${value.toFixed(2)}`, "PnL"]}
+              formatter={(value) => [`$${Number(value).toFixed(2)}`, "PnL"]}
             />
             <Area
               type="monotone"

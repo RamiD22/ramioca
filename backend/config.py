@@ -43,6 +43,7 @@ class Settings:
 
     # Anthropic (for Claude-powered trading agent)
     ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
+    ANTHROPIC_MODEL: str = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
 
     # Supabase (optional — bot works without it)
     SUPABASE_URL: str = os.getenv("SUPABASE_URL", "")

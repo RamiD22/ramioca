@@ -46,13 +46,12 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelna
 logger = logging.getLogger(__name__)
 
 # ── Global state ──
-AGENT_BUDGET = 500.0  # Full budget for single Claude agent
+AGENT_BUDGET = 500.0
 
 connected_clients: set[WebSocket] = set()
 bot_start_time: float = 0
 bot_running = False
 
-# Single Claude agent — initialized in bot_loop()
 claude_agent: TradingAgent | None = None
 
 # Shared bot status
@@ -175,7 +174,7 @@ def _compute_market_pnl(trades: list[dict]) -> list[dict]:
 
 
 def build_competition_state() -> CompetitionState:
-    """Build the dashboard state — Claude agent in alpha slot, beta empty."""
+    """Build the dashboard state — alpha slot + empty beta."""
     def _agent_state(agent: TradingAgent) -> AgentState:
         return AgentState(
             agent_id=agent.agent_id,
@@ -188,7 +187,7 @@ def build_competition_state() -> CompetitionState:
         )
 
     return CompetitionState(
-        alpha=_agent_state(claude_agent) if claude_agent else AgentState(agent_id="alpha", label="Claude (Opus)"),
+        alpha=_agent_state(claude_agent) if claude_agent else AgentState(agent_id="alpha", label="Claude (Sonnet)"),
         beta=AgentState(agent_id="beta", label="(inactive)"),
         bot_status=shared_bot_status,
         markets=shared_markets,
@@ -332,16 +331,15 @@ async def run_agent_cycle(
 
 
 async def bot_loop() -> None:
-    """Main trading bot loop — single Claude agent."""
+    """Main trading bot loop."""
     global bot_running, claude_agent, shared_bot_status, shared_markets
     bot_running = True
 
-    logger.info("Bot loop started (dry_run=%s, Claude Opus agent)", settings.DRY_RUN)
+    logger.info("Bot loop started (dry_run=%s, model=%s)", settings.DRY_RUN, settings.ANTHROPIC_MODEL)
 
-    # ── Create Claude agent ──
     claude_agent = TradingAgent(
         agent_id="alpha",
-        label="Claude (Opus)",
+        label="Claude (Sonnet)",
         strategy_fn=analyze_market_claude,
         budget=AGENT_BUDGET,
     )
@@ -357,8 +355,8 @@ async def bot_loop() -> None:
     )
 
     emit_event(
-        None, "info", "Claude (Opus) agent started",
-        f"Budget: ${AGENT_BUDGET:.0f} | DRY_RUN={'ON' if settings.DRY_RUN else 'OFF'}",
+        None, "info", "Claude (Sonnet) agent started",
+        f"Budget: ${AGENT_BUDGET:.0f} | DRY_RUN={'ON' if settings.DRY_RUN else 'OFF'} | Model: {settings.ANTHROPIC_MODEL}",
         icon="info", severity="info",
     )
 

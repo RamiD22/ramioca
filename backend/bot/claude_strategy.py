@@ -1,6 +1,6 @@
-"""Claude Opus trading strategy for 5-minute crypto binary markets.
+"""Claude trading strategy for 5-minute crypto binary markets.
 
-Calls Opus every 30 seconds with full Binance data + trade history feedback.
+Calls Claude every 30 seconds with full Binance data + trade history feedback.
 Reads skills.md for domain knowledge. Adjusts based on recent outcomes.
 """
 
@@ -332,7 +332,7 @@ class _CachedDecision:
 # ── Main strategy class ─────────────────────────────────────────
 
 class ClaudeStrategy:
-    """Claude Opus trading strategy — called every 30s per market."""
+    """Claude trading strategy — called every 30s per market."""
 
     def __init__(self) -> None:
         self._client = None
@@ -355,7 +355,7 @@ class ClaudeStrategy:
         try:
             import anthropic
             self._client = anthropic.Anthropic(api_key=api_key)
-            logger.info("Claude Opus strategy initialized")
+            logger.info("Claude strategy initialized (model=%s)", settings.ANTHROPIC_MODEL)
             return True
         except Exception as e:
             logger.error(f"Failed to init Anthropic client: {e}")
@@ -390,7 +390,7 @@ class ClaudeStrategy:
         start = time.time()
         try:
             response = self._client.messages.create(
-                model="claude-opus-4-20250514",
+                model=settings.ANTHROPIC_MODEL,
                 max_tokens=400,
                 system=SYSTEM_PROMPT,
                 tools=[TRADING_DECISION_TOOL],
@@ -423,7 +423,7 @@ class ClaudeStrategy:
                     coin = market.question.split(" ")[0][:3].upper()
 
                     logger.info(
-                        f"[Opus] {decision.action} {coin} | "
+                        f"[Claude] {decision.action} {coin} | "
                         f"conf={decision.confidence:.0%} edge={decision.edge:.1%} "
                         f"Δ={market.window_delta*100:+.3f}% "
                         f"elapsed={market.window_elapsed_pct:.0%} "
@@ -434,13 +434,13 @@ class ClaudeStrategy:
                     )
                     return decision
 
-            logger.warning(f"[Opus] No tool_use in response ({latency:.1f}s)")
+            logger.warning(f"[Claude] No tool_use in response ({latency:.1f}s)")
             return None
 
         except Exception as e:
             latency = time.time() - start
             self._errors += 1
-            logger.error(f"[Opus] API error ({latency:.1f}s): {e}")
+            logger.error(f"[Claude] API error ({latency:.1f}s): {e}")
             return None
 
     def analyze_market(

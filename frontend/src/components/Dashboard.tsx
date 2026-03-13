@@ -125,7 +125,7 @@ export default function Dashboard({ state, connected, onCommand, pnlHistory }: P
         transition={{ delay: 0.6 }}
         className="mt-8 flex items-center justify-between text-[10px] font-mono text-white/15 px-2"
       >
-        <span>RAMIOCA v3.0 | Claude Opus Agent</span>
+        <span>RAMIOCA v3.0 | Claude Sonnet Agent</span>
         <span>{bot_status?.markets_tracked || 0} markets tracked</span>
         <span>
           {bot_status?.last_scan

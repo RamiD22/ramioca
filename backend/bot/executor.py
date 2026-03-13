@@ -99,7 +99,7 @@ class Executor:
         )
 
         # ── Pre-flight: use fresh order book price for execution ──
-        # The signal price may be stale (Opus takes 5-18s to respond).
+        # The signal price may be stale (Claude takes 5-18s to respond).
         # Always use the live CLOB price for execution decisions.
         try:
             book_price = polymarket.get_price(signal.token_id, "BUY")

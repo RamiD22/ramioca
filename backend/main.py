@@ -633,6 +633,27 @@ async def get_polymarket_trades():
     return {"trades": _get_polymarket_trades()}
 
 
+@app.get("/api/geocheck")
+async def geocheck():
+    """Check if this server's IP is geoblocked by Polymarket."""
+    import httpx as _httpx
+    results = {}
+    async with _httpx.AsyncClient(timeout=10) as client:
+        # Check our external IP
+        try:
+            resp = await client.get("https://ipinfo.io/json")
+            results["ip_info"] = resp.json()
+        except Exception as e:
+            results["ip_info"] = {"error": str(e)}
+        # Check Polymarket geoblock
+        try:
+            resp = await client.get("https://clob.polymarket.com/geo")
+            results["polymarket_geo"] = resp.json() if resp.status_code == 200 else {"status": resp.status_code, "text": resp.text[:200]}
+        except Exception as e:
+            results["polymarket_geo"] = {"error": str(e)}
+    return results
+
+
 @app.post("/api/bot/start")
 async def start_bot():
     global bot_running

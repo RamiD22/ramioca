@@ -104,11 +104,12 @@ class Executor:
         try:
             book_price = polymarket.get_price(signal.token_id, "BUY")
             if book_price and book_price > 0:
-                # Hard-reject if book price is at extremes (no edge possible)
-                if book_price > settings.MAX_PRICE or book_price < settings.MIN_PRICE:
+                # Hard-reject at true extremes only (>0.92 or <0.08).
+                # 15m/daily markets legitimately trade above 0.85 when
+                # the outcome becomes clearer — don't block those.
+                if book_price > 0.92 or book_price < 0.08:
                     logger.warning(
-                        f"Order book price {book_price:.4f} outside "
-                        f"[{settings.MIN_PRICE}, {settings.MAX_PRICE}] — no edge, skipping"
+                        f"Order book price {book_price:.4f} at extreme — no edge, skipping"
                     )
                     return None
                 # Use the fresh book price for execution

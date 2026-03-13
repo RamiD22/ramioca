@@ -23,7 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from backend.bot.agent import TradingAgent, StrategyState
 from backend.bot.client import polymarket
 from backend.bot.executor import Executor
-from backend.bot.strategy import analyze_market as v2_strategy
+from backend.bot.strategy import analyze_market as v2_strategy, is_5m_updown_market, is_15m_updown_market, is_daily_updown_market
 from backend.bot.strategy_v1 import analyze_market_v1 as v1_strategy
 from backend.bot.claude_strategy import analyze_market_claude, claude_strategy
 from backend.config import settings
@@ -34,10 +34,11 @@ from backend.models import (
     CompetitionState,
     DashboardState,
     MarketInfo,
+    StrategyOutput,
     Timeframe,
 )
 from backend.services.db import persist_trade, persist_pnl_snapshot, fetch_pnl_history
-from backend.services.market_scanner import fetch_live_5m_markets, fetch_crypto_markets
+from backend.services.market_scanner import fetch_live_5m_markets, fetch_live_15m_markets, fetch_daily_markets, fetch_crypto_markets
 from backend.services.portfolio import compute_metrics_from_polymarket, fetch_raw_positions, fetch_raw_trades, sync_balance, sync_positions_for_agent, cleanup_settled_positions
 from backend.services.price_feed import price_feed
 
@@ -215,14 +216,10 @@ async def run_agent_cycle(
             agent.owned_sizes.pop(tid, None)
         logger.info(f"[{agent.agent_id}] Cleaned up {len(settled_tokens)} settled positions")
 
-    # Run strategy on each live 5-minute market
-    # Markets arrive pre-filtered from fetch_live_5m_markets() — symbol in market.category
+    # Run strategy on each live market (5-min, 15-min, and daily)
     signals = []
 
-    # Compute window elapsed percentage (how far into the current 5-min window)
     now_et = datetime.now(_ET)
-    elapsed_seconds = (now_et.minute % 5) * 60 + now_et.second
-    window_elapsed_pct = elapsed_seconds / 300.0  # 300s = 5 minutes
 
     # ── Phase 1: Analyze all markets and collect signals ──
     actionable_signals: list[StrategyOutput] = []
@@ -235,13 +232,32 @@ async def run_agent_cycle(
             logger.warning(f"[{agent.agent_id}] SKIP (no price data): {symbol}")
             continue
 
-        # Enrich market with window context for strategy use
-        market.window_delta = price_feed.get_window_delta(symbol)
+        # Compute per-market window delta and elapsed % based on market type
+        is_5m = is_5m_updown_market(market.question)
+        is_15m = is_15m_updown_market(market.question)
+        is_daily = is_daily_updown_market(market.question)
+
+        if is_15m:
+            market.window_delta = price_feed.get_window_delta_15m(symbol)
+            elapsed_seconds = (now_et.minute % 15) * 60 + now_et.second
+            window_elapsed_pct = elapsed_seconds / 900.0
+        elif is_daily:
+            market.window_delta = price_feed.get_window_delta_daily(symbol)
+            # Daily markets: elapsed since midnight ET, resolve at 11PM ET (23h window)
+            seconds_since_midnight = now_et.hour * 3600 + now_et.minute * 60 + now_et.second
+            window_elapsed_pct = min(seconds_since_midnight / (23 * 3600), 1.0)
+        else:
+            # Default: 5-min market
+            market.window_delta = price_feed.get_window_delta(symbol)
+            elapsed_seconds = (now_et.minute % 5) * 60 + now_et.second
+            window_elapsed_pct = elapsed_seconds / 300.0
+
         market.window_elapsed_pct = window_elapsed_pct
 
+        mkt_type = "15m" if is_15m else ("daily" if is_daily else "5m")
         logger.info(
             f"[{agent.agent_id}] Analyzing: {market.question[:50]} ({symbol}) "
-            f"Δ={market.window_delta:+.4f} elapsed={window_elapsed_pct:.0%}"
+            f"Δ={market.window_delta:+.4f} elapsed={window_elapsed_pct:.0%} [{mkt_type}]"
         )
         signal = agent.strategy_fn(market, price_data, agent.strategy_state)
         signals.append(signal)
@@ -380,17 +396,27 @@ async def bot_loop() -> None:
             shared_bot_status.dry_run = settings.DRY_RUN
             shared_bot_status.uptime_seconds = time.time() - bot_start_time
 
-            # ── 1. Scan live 5-minute markets (shared) ──
+            # ── 1. Scan all market types (5m, 15m, daily) ──
             live_5m = await fetch_live_5m_markets()
-            shared_markets = live_5m  # Dashboard shows live markets
-            shared_bot_status.markets_tracked = len(live_5m)
+            live_15m = await fetch_live_15m_markets()
+            daily = await fetch_daily_markets()
+            all_markets = live_5m + live_15m + daily
+            shared_markets = all_markets
+            shared_bot_status.markets_tracked = len(all_markets)
             shared_bot_status.last_scan = datetime.now(timezone.utc)
 
+            parts = []
             if live_5m:
-                names = ", ".join(m.question[:30] for m in live_5m[:4])
-                emit_event(None, "scan", f"{len(live_5m)} live 5M markets", names, icon="scan", severity="info")
+                parts.append(f"{len(live_5m)} 5M")
+            if live_15m:
+                parts.append(f"{len(live_15m)} 15M")
+            if daily:
+                parts.append(f"{len(daily)} daily")
+
+            if parts:
+                emit_event(None, "scan", f"Live markets: {', '.join(parts)}", "", icon="scan", severity="info")
             else:
-                emit_event(None, "scan", "No live 5M markets right now", "Waiting for next 5-minute window...", icon="scan", severity="info")
+                emit_event(None, "scan", "No live markets right now", "Waiting for next window...", icon="scan", severity="info")
 
             # ── 2. Fetch real Polymarket data (positions + trades) ──
             global _polymarket_trades_cache
@@ -399,9 +425,9 @@ async def bot_loop() -> None:
             # Cache ALL wallet trades (PnL is computed per-market on read)
             _polymarket_trades_cache = raw_trades
 
-            # ── 3. Run Claude agent ──
+            # ── 3. Run Claude agent on all market types ──
             try:
-                await run_agent_cycle(claude_agent, live_5m, raw_positions, raw_trades)
+                await run_agent_cycle(claude_agent, all_markets, raw_positions, raw_trades)
             except Exception as agent_err:
                 logger.error(f"[claude] cycle error: {agent_err}", exc_info=True)
                 emit_event(claude_agent, "error", "Cycle error", str(agent_err)[:100], icon="error", severity="error")

@@ -40,9 +40,16 @@ class PriceFeed:
         self._running = False
 
         # Window open price tracking for 5-min markets
-        # Records the price at the start of each 5-minute window
         self._window_opens: dict[str, float] = {}  # symbol → price at window open
-        self._current_window_ts: int = 0  # unix timestamp of current window start
+        self._current_window_ts: int = 0  # unix timestamp of current 5m window start
+
+        # 15-min window tracking
+        self._window_opens_15m: dict[str, float] = {}
+        self._current_window_ts_15m: int = 0
+
+        # Daily window tracking (price at midnight ET)
+        self._daily_opens: dict[str, float] = {}
+        self._current_day: str = ""  # "YYYY-MM-DD"
 
     async def load_historical(self, symbol: str = "BTCUSDT", limit: int = 100) -> None:
         """Load historical candles from Binance REST API."""
@@ -75,18 +82,25 @@ class PriceFeed:
         # Seed window opens from loaded data so window delta works from first cycle
         now = time.time()
         self._current_window_ts = int(now // 300) * 300
+        self._current_window_ts_15m = int(now // 900) * 900
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        _et = ZoneInfo("America/New_York")
+        self._current_day = datetime.now(_et).strftime("%Y-%m-%d")
         for symbol in SYMBOLS:
             if symbol in self.current_prices:
                 self._window_opens[symbol] = self.current_prices[symbol]
+                self._window_opens_15m[symbol] = self.current_prices[symbol]
+                self._daily_opens[symbol] = self.current_prices[symbol]
                 logger.info(f"Seeded window open for {symbol}: ${self.current_prices[symbol]:.2f}")
 
     def _check_window_boundary(self, symbol: str, price: float) -> None:
-        """Track price at 5-minute window boundaries for window delta calculation."""
+        """Track price at 5-min, 15-min, and daily window boundaries."""
         now = time.time()
-        window_ts = int(now // 300) * 300  # Round down to nearest 5 minutes
 
+        # ── 5-min boundary ──
+        window_ts = int(now // 300) * 300
         if window_ts != self._current_window_ts:
-            # New 5-minute window — record opens for all symbols with known prices
             self._current_window_ts = window_ts
             for sym in SYMBOLS:
                 if sym in self.current_prices:
@@ -96,9 +110,33 @@ class PriceFeed:
                 f"Opens: {', '.join(f'{s}=${p:.2f}' for s, p in self._window_opens.items())}"
             )
 
-        # Also set initial window open if we don't have one yet
+        # ── 15-min boundary ──
+        window_ts_15m = int(now // 900) * 900
+        if window_ts_15m != self._current_window_ts_15m:
+            self._current_window_ts_15m = window_ts_15m
+            for sym in SYMBOLS:
+                if sym in self.current_prices:
+                    self._window_opens_15m[sym] = self.current_prices[sym]
+            logger.info(f"New 15-min window at {window_ts_15m}")
+
+        # ── Daily boundary (midnight ET) ──
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        today = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
+        if today != self._current_day:
+            self._current_day = today
+            for sym in SYMBOLS:
+                if sym in self.current_prices:
+                    self._daily_opens[sym] = self.current_prices[sym]
+            logger.info(f"New trading day: {today}")
+
+        # Set initial opens if missing
         if symbol not in self._window_opens and price > 0:
             self._window_opens[symbol] = price
+        if symbol not in self._window_opens_15m and price > 0:
+            self._window_opens_15m[symbol] = price
+        if symbol not in self._daily_opens and price > 0:
+            self._daily_opens[symbol] = price
 
     async def start_ws(self) -> None:
         """Connect to Binance WebSocket for real-time price updates."""
@@ -146,18 +184,28 @@ class PriceFeed:
         return self.current_prices.get(symbol, 0.0)
 
     def get_window_delta(self, symbol: str) -> float:
-        """Get the price change from the current 5-min window open to now.
-
-        Uses explicitly tracked window open prices (set at each 5-min boundary).
-        Returns fractional change (e.g., 0.003 = +0.3% from window open).
-        """
+        """Get price change from the current 5-min window open to now."""
         current = self.current_prices.get(symbol, 0.0)
         window_open = self._window_opens.get(symbol, 0.0)
-
         if window_open <= 0 or current <= 0:
             return 0.0
-
         return (current - window_open) / window_open
+
+    def get_window_delta_15m(self, symbol: str) -> float:
+        """Get price change from the current 15-min window open to now."""
+        current = self.current_prices.get(symbol, 0.0)
+        window_open = self._window_opens_15m.get(symbol, 0.0)
+        if window_open <= 0 or current <= 0:
+            return 0.0
+        return (current - window_open) / window_open
+
+    def get_window_delta_daily(self, symbol: str) -> float:
+        """Get price change from today's open (midnight ET) to now."""
+        current = self.current_prices.get(symbol, 0.0)
+        day_open = self._daily_opens.get(symbol, 0.0)
+        if day_open <= 0 or current <= 0:
+            return 0.0
+        return (current - day_open) / day_open
 
 
 price_feed = PriceFeed()

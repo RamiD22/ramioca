@@ -1,7 +1,7 @@
 """Discover and track active crypto prediction markets on Polymarket.
 
 Uses the Gamma events API with computed slug+timestamp to find
-the currently-live 5-minute up/down markets for BTC, ETH, SOL, XRP.
+the currently-live 5-minute, 15-minute, and daily up/down markets.
 """
 
 from __future__ import annotations
@@ -29,21 +29,49 @@ _5M_SLUGS = {
     "xrp-updown-5m": "XRPUSDT",
 }
 
+# Slug prefixes for the 15-minute up/down markets
+_15M_SLUGS = {
+    "btc-updown-15m": "BTCUSDT",
+    "eth-updown-15m": "ETHUSDT",
+    "sol-updown-15m": "SOLUSDT",
+    "xrp-updown-15m": "XRPUSDT",
+}
+
+# Daily markets use a different slug format: {coin}-up-or-down-{month}-{day}-{time}-et
+_DAILY_SLUG_MAP = {
+    "bitcoin": "BTCUSDT",
+    "ethereum": "ETHUSDT",
+    "solana": "SOLUSDT",
+    "xrp": "XRPUSDT",
+    "dogecoin": "DOGEUSDT",
+    "bnb": "BNBUSDT",
+    "hype": "HYPEUSDT",
+}
+
+_MONTH_NAMES = [
+    "", "january", "february", "march", "april", "may", "june",
+    "july", "august", "september", "october", "november", "december",
+]
+
 
 def _current_5m_windows() -> list[int]:
-    """Return unix timestamps for the current 5-min window start time.
-
-    5-min markets are created at :00, :05, :10, ... :55 each hour.
-    The slug uses the START time's unix timestamp (e.g., btc-updown-5m-1773331800
-    for the 12:10-12:15 window that starts at 12:10).
-    Only returns the CURRENT window — trade the active market, not the next one.
-    """
+    """Return unix timestamps for the current 5-min window start time."""
     now_et = datetime.now(_ET)
-    # Current window: round down to nearest 5 minutes
     minute = now_et.minute
     window_start_min = (minute // 5) * 5
     window_start = now_et.replace(minute=window_start_min, second=0, microsecond=0)
+    return [int(window_start.timestamp())]
 
+
+def _current_15m_windows() -> list[int]:
+    """Return unix timestamps for the current 15-min window start time.
+
+    15-min markets are created at :00, :15, :30, :45 each hour.
+    """
+    now_et = datetime.now(_ET)
+    minute = now_et.minute
+    window_start_min = (minute // 15) * 15
+    window_start = now_et.replace(minute=window_start_min, second=0, microsecond=0)
     return [int(window_start.timestamp())]
 
 
@@ -140,6 +168,96 @@ async def fetch_live_5m_markets() -> list[MarketInfo]:
         f"Found {len(markets)} live 5M markets at "
         f"{now_et.strftime('%I:%M %p')} ET"
     )
+    return markets
+
+
+async def fetch_live_15m_markets() -> list[MarketInfo]:
+    """Fetch currently-live 15-minute up/down markets from Gamma events API."""
+    markets: list[MarketInfo] = []
+    timestamps = _current_15m_windows()
+
+    async with httpx.AsyncClient(timeout=15) as client:
+        tasks = []
+        for slug_prefix, symbol in _15M_SLUGS.items():
+            for ts in timestamps:
+                slug = f"{slug_prefix}-{ts}"
+                tasks.append((slug, symbol, client.get(
+                    f"{settings.GAMMA_HOST}/events",
+                    params={"slug": slug},
+                )))
+
+        for slug, symbol, coro in tasks:
+            try:
+                resp = await coro
+                if resp.status_code != 200:
+                    continue
+
+                data = resp.json()
+                events = data if isinstance(data, list) else [data]
+
+                if not events or not events[0]:
+                    continue
+
+                info = _parse_event_market(events[0])
+                if info:
+                    info.category = symbol
+                    markets.append(info)
+                    logger.debug(f"Found 15M market: {info.question} ({symbol})")
+
+            except Exception as e:
+                logger.debug(f"Failed to fetch {slug}: {e}")
+
+    logger.info(f"Found {len(markets)} live 15M markets")
+    return markets
+
+
+async def fetch_daily_markets() -> list[MarketInfo]:
+    """Fetch today's daily up/down markets from Gamma events API.
+
+    Daily markets use slug format: {coin}-up-or-down-{month}-{day}-{hour}{am/pm}-et
+    They resolve at 11PM ET each day.
+    """
+    markets: list[MarketInfo] = []
+    now_et = datetime.now(_ET)
+
+    # Build slugs for today's daily markets
+    month = _MONTH_NAMES[now_et.month]
+    day = now_et.day
+
+    # Daily markets resolve at 11PM ET — only trade if before resolution
+    if now_et.hour >= 23:
+        # After 11PM, look for tomorrow's market
+        tomorrow = now_et + timedelta(days=1)
+        month = _MONTH_NAMES[tomorrow.month]
+        day = tomorrow.day
+
+    async with httpx.AsyncClient(timeout=15) as client:
+        for coin, symbol in _DAILY_SLUG_MAP.items():
+            slug = f"{coin}-up-or-down-{month}-{day}-11pm-et"
+            try:
+                resp = await client.get(
+                    f"{settings.GAMMA_HOST}/events",
+                    params={"slug": slug},
+                )
+                if resp.status_code != 200:
+                    continue
+
+                data = resp.json()
+                events = data if isinstance(data, list) else [data]
+
+                if not events or not events[0]:
+                    continue
+
+                info = _parse_event_market(events[0])
+                if info:
+                    info.category = symbol
+                    markets.append(info)
+                    logger.debug(f"Found daily market: {info.question} ({symbol})")
+
+            except Exception as e:
+                logger.debug(f"Failed to fetch daily {slug}: {e}")
+
+    logger.info(f"Found {len(markets)} daily markets")
     return markets
 
 

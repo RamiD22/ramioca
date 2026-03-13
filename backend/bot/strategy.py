@@ -64,6 +64,26 @@ def is_5m_updown_market(question: str) -> bool:
     return "up or down" in q and ("5m" in q or re.search(r"\d+:\d+[ap]m.*\d+:\d+[ap]m", q))
 
 
+def is_15m_updown_market(question: str) -> bool:
+    """Detect if this is a 15-minute up/down market."""
+    q = question.lower()
+    return "up or down" in q and "15m" in q
+
+
+def is_daily_updown_market(question: str) -> bool:
+    """Detect if this is a daily up/down market (resolves at 11PM ET)."""
+    q = question.lower()
+    # Daily markets have format like "Bitcoin Up or Down - March 14, 11PM ET" (no time range)
+    if "up or down" not in q:
+        return False
+    # Has a date but no time range (no dash between times)
+    if re.search(r"\d+:\d+[ap]m\s*-\s*\d+:\d+[ap]m", q):
+        return False  # This is a 5m or 15m market with time range
+    if re.search(r"\d{1,2}[ap]m\s+et", q):
+        return True  # Single time like "11PM ET"
+    return False
+
+
 # ─── Technical Indicators ────────────────────────────────────────
 
 def compute_sma(prices: list[float], period: int) -> float:
@@ -353,9 +373,14 @@ def analyze_market(
             continue
         signals.append(price_signal(prices, tf))
 
-    # Select weights
+    # Detect market type
     is_5m = is_5m_updown_market(market.question)
-    weights = TF_WEIGHTS_5M if is_5m else TF_WEIGHTS_STANDARD
+    is_15m = is_15m_updown_market(market.question)
+    is_daily = is_daily_updown_market(market.question)
+    is_short_term = is_5m or is_15m  # Both use window delta approach
+
+    # Select weights — short-term markets favor M5, daily/standard favor H1/H4
+    weights = TF_WEIGHTS_5M if is_short_term else TF_WEIGHTS_STANDARD
 
     # Composite weighted signal
     weighted_score = sum(
@@ -375,31 +400,39 @@ def analyze_market(
     else:
         composite = Signal.NEUTRAL
 
-    # ── Window delta signal (dominant for 5-min markets) ──
-    # Research shows this is the #1 edge: price change from window open predicts outcome
+    # ── Window delta signal (dominant for short-term markets) ──
     w_delta = market.window_delta
     w_elapsed = market.window_elapsed_pct
 
-    if is_5m and abs(w_delta) > 0.0005 and w_elapsed > 0.30:
-        # Window delta dominates — it's the primary predictor for 5-min markets.
-        # Technical indicators on prediction token prices add noise, not signal.
-        elapsed_boost = 1.0 + w_elapsed * 1.5  # 1.75x at 50%, 2.2x at 80%
-        delta_score = np.clip(w_delta * 500, -0.9, 0.9) * elapsed_boost
+    if is_short_term and abs(w_delta) > 0.0005 and w_elapsed > 0.30:
+        # Window delta dominates — primary predictor for short-term markets.
+        elapsed_boost = 1.0 + w_elapsed * 1.5
+        # 15-min markets need less aggressive scaling (more time = less noise)
+        multiplier = 500 if is_5m else 300
+        delta_score = np.clip(w_delta * multiplier, -0.9, 0.9) * elapsed_boost
 
         # Blend: 90% window delta + 10% technical indicators
         weighted_score = 0.90 * delta_score + 0.10 * weighted_score
 
         logger.info(
             f"Window delta signal: Δ={w_delta:+.4f} elapsed={w_elapsed:.0%} "
-            f"delta_score={delta_score:.3f} blended={weighted_score:.3f}"
+            f"delta_score={delta_score:.3f} blended={weighted_score:.3f} "
+            f"({'5m' if is_5m else '15m'})"
         )
+
+    # For daily markets, technical indicators are the primary signal
+    # (window delta is less useful over 24h — trend analysis matters more)
+    if is_daily and abs(w_delta) > 0.001:
+        delta_score = np.clip(w_delta * 100, -0.4, 0.4)
+        # Blend: 40% delta + 60% technicals (technicals matter more for daily)
+        weighted_score = 0.40 * delta_score + 0.60 * weighted_score
 
     # Cap blended score to prevent unrealistic edges
     weighted_score = float(np.clip(weighted_score, -0.60, 0.60))
 
     # ── Probability estimate ──
     base_prob = market.price_yes
-    max_adj = 0.35 if is_5m else 0.22
+    max_adj = 0.35 if is_short_term else 0.25
     adjustment = weighted_score * max_adj
     our_prob = max(0.01, min(0.99, base_prob + adjustment))
 
@@ -431,11 +464,9 @@ def analyze_market(
             recommended_side=None,
         )
 
-    # ── Timing gate for 5-min markets ──
-    # Only trade between 50-80% elapsed (2.5-4 min into the window).
-    # Before 50%: not enough data, direction unclear.
-    # After 80%: prices at extremes, no edge left.
+    # ── Timing gate for short-term markets ──
     if is_5m and (w_elapsed < 0.50 or w_elapsed > 0.80):
+        # 5-min: trade between 50-80% elapsed (2.5-4 min)
         if w_elapsed > 0.80:
             logger.debug(f"Skip {market.question[:40]} — {w_elapsed:.0%} elapsed (too close to resolution)")
         return StrategyOutput(
@@ -444,6 +475,19 @@ def analyze_market(
             market_price=market.price_yes, edge=round(edge, 4),
             recommended_side=None,
         )
+
+    if is_15m and (w_elapsed < 0.30 or w_elapsed > 0.85):
+        # 15-min: trade between 30-85% elapsed (4.5-12.75 min) — wider window
+        if w_elapsed > 0.85:
+            logger.debug(f"Skip {market.question[:40]} — {w_elapsed:.0%} elapsed (15m too close to resolution)")
+        return StrategyOutput(
+            token_id=token_id, market=market.question, signals=signals,
+            composite_signal=composite, probability_estimate=round(our_prob, 4),
+            market_price=market.price_yes, edge=round(edge, 4),
+            recommended_side=None,
+        )
+
+    # Daily markets: no timing gate — trade anytime before resolution
 
     # ── Extreme price filter ──
     # If the market price is already at extremes, outcome is nearly certain.
@@ -463,15 +507,15 @@ def analyze_market(
     h1_bearish = h1_signal in (Signal.SELL, Signal.STRONG_SELL)
 
     if edge > MIN_EDGE:
-        # For 5-min markets with strong window delta, skip H1 filter
-        if is_5m and abs(w_delta) > 0.001 and w_elapsed > 0.50:
+        # For short-term markets with strong window delta, skip H1 filter
+        if is_short_term and abs(w_delta) > 0.001 and w_elapsed > 0.40:
             recommended_side = Side.BUY
             token_id = market.token_id_yes
         elif not h1_bearish:
             recommended_side = Side.BUY
             token_id = market.token_id_yes
     elif edge < -MIN_EDGE:
-        if is_5m and abs(w_delta) > 0.001 and w_elapsed > 0.50:
+        if is_short_term and abs(w_delta) > 0.001 and w_elapsed > 0.40:
             recommended_side = Side.SELL
             token_id = market.token_id_no
             edge = -edge

@@ -98,6 +98,30 @@ class Executor:
             f"{signal.market[:55]}"
         )
 
+        # ── Pre-flight: verify order book price is sane ──
+        # The strategy uses Gamma API prices which can lag behind the CLOB.
+        # If the real order book price diverges by >25% from our signal, abort.
+        try:
+            book_price = polymarket.get_price(signal.token_id, "BUY")
+            if book_price and book_price > 0:
+                divergence = abs(book_price - price) / max(price, 0.01)
+                if divergence > 0.25:
+                    logger.warning(
+                        f"Order book price {book_price:.4f} diverges {divergence:.0%} from "
+                        f"signal price {price:.4f} — skipping stale signal"
+                    )
+                    return None
+                # Also hard-reject if book price itself is at extremes
+                if book_price > settings.MAX_PRICE or book_price < settings.MIN_PRICE:
+                    logger.warning(
+                        f"Order book price {book_price:.4f} outside "
+                        f"[{settings.MIN_PRICE}, {settings.MAX_PRICE}] — skipping"
+                    )
+                    return None
+        except Exception as e:
+            logger.warning(f"Pre-flight price check failed: {e}")
+            # Continue — the client.py price guard will catch it
+
         result = None
         try:
             # ── Market order first (instant fill) ──

@@ -434,7 +434,23 @@ def analyze_market(
     # ── Timing gate for 5-min markets ──
     # Only trade after 40% of window has elapsed (2+ minutes in)
     # Earlier trades are noise; later trades have confirmed direction
-    if is_5m and w_elapsed < 0.40:
+    # Also STOP trading after 85% elapsed — market is nearly resolved,
+    # order book prices are at extremes (0.01/0.99), guaranteed losers.
+    if is_5m and (w_elapsed < 0.40 or w_elapsed > 0.85):
+        if w_elapsed > 0.85:
+            logger.debug(f"Skip {market.question[:40]} — {w_elapsed:.0%} elapsed (too close to resolution)")
+        return StrategyOutput(
+            token_id=token_id, market=market.question, signals=signals,
+            composite_signal=composite, probability_estimate=round(our_prob, 4),
+            market_price=market.price_yes, edge=round(edge, 4),
+            recommended_side=None,
+        )
+
+    # ── Extreme price filter ──
+    # If the market price is already at extremes, outcome is nearly certain.
+    # No edge to be found — skip to avoid 0.99/0.01 garbage trades.
+    if market.price_yes > 0.90 or market.price_yes < 0.10:
+        logger.debug(f"Skip {market.question[:40]} — price_yes={market.price_yes:.3f} too extreme")
         return StrategyOutput(
             token_id=token_id, market=market.question, signals=signals,
             composite_signal=composite, probability_estimate=round(our_prob, 4),

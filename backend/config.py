@@ -32,7 +32,7 @@ class Settings:
     MIN_SIGNAL: float = float(os.getenv("POLYMARKET_AGENT_MIN_SIGNAL", "0.56"))
     MIN_PRICE: float = float(os.getenv("POLYMARKET_AGENT_MIN_PRICE", "0.15"))
     MAX_PRICE: float = float(os.getenv("POLYMARKET_AGENT_MAX_PRICE", "0.85"))
-    MIN_CONFIDENCE: float = float(os.getenv("POLYMARKET_AGENT_MIN_CONFIDENCE", "0.70"))
+    MIN_CONFIDENCE: float = float(os.getenv("POLYMARKET_AGENT_MIN_CONFIDENCE", "0.55"))
     MIN_LIQUIDITY: float = float(os.getenv("POLYMARKET_AGENT_MIN_LIQUIDITY_USDC", "1500"))
     MIN_VOLUME_24H: float = float(os.getenv("POLYMARKET_AGENT_MIN_VOLUME24H_USDC", "2500"))
 

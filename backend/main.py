@@ -284,45 +284,33 @@ async def run_agent_cycle(
                     severity="info",
                 )
 
-    # ── Phase 2: Focus-fire — only execute the BEST signal per cycle ──
-    # Concentrating on the strongest signal improves win rate vs spreading thin.
-    if actionable_signals:
-        # Pick the signal with the highest absolute edge
-        best = max(actionable_signals, key=lambda s: abs(s.edge))
-        mkt_short = best.market[:55]
-
-        # Log skipped signals
-        for s in actionable_signals:
-            if s is not best:
-                logger.info(
-                    f"[{agent.agent_id}] SKIP (not best): edge={s.edge:.3f} on {s.market[:50]} "
-                    f"(best={abs(best.edge):.3f})"
-                )
-
-        trade = agent.executor.execute_signal(best)
+    # ── Phase 2: Execute ALL actionable signals ──
+    for sig in actionable_signals:
+        mkt_short = sig.market[:55]
+        trade = agent.executor.execute_signal(sig)
 
         if trade:
-            agent.owned_token_ids.add(best.token_id)
-            agent.owned_sizes[best.token_id] = agent.owned_sizes.get(best.token_id, 0) + trade.size
+            agent.owned_token_ids.add(sig.token_id)
+            agent.owned_sizes[sig.token_id] = agent.owned_sizes.get(sig.token_id, 0) + trade.size
             persist_trade(trade, agent.agent_id)
             emit_event(
                 agent,
                 "trade",
-                f"{'🟢' if best.recommended_side.value == 'BUY' else '🔴'} {best.recommended_side.value} ${trade.size:.2f}",
-                f"Edge: {best.edge:.3f} | {best.composite_signal.value} | Price: {trade.price:.4f} (best of {len(actionable_signals)})",
+                f"{'🟢' if sig.recommended_side.value == 'BUY' else '🔴'} {sig.recommended_side.value} ${trade.size:.2f}",
+                f"Edge: {sig.edge:.3f} | {sig.composite_signal.value} | Price: {trade.price:.4f}",
                 market=mkt_short,
-                icon=f"trade_{best.recommended_side.value.lower()}",
+                icon=f"trade_{sig.recommended_side.value.lower()}",
                 severity="success",
             )
         else:
-            mp = best.market_price
+            mp = sig.market_price
             in_range = settings.MIN_PRICE <= mp <= settings.MAX_PRICE
             if in_range:
                 emit_event(
                     agent,
                     "skip",
                     f"Signal blocked by risk",
-                    f"{best.composite_signal.value} {best.recommended_side.value} edge={best.edge:.3f} — filtered by risk checks",
+                    f"{sig.composite_signal.value} {sig.recommended_side.value} edge={sig.edge:.3f} — filtered by risk checks",
                     market=mkt_short,
                     icon="skip",
                     severity="warning",

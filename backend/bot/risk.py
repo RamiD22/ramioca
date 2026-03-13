@@ -45,10 +45,16 @@ def calculate_position_size(
         logger.info("Max exposure reached — skip")
         return 0.0
 
-    # Price range filter
+    # Price range filter — check BOTH the market price AND execution price.
+    # When we SELL (buy the NO token), execution price = 1 - market_price.
+    # Both must be in the tradeable range to avoid 0.99/0.01 garbage trades.
     mp = signal.market_price
+    exec_price = mp if signal.recommended_side == Side.BUY else (1.0 - mp)
     if mp < settings.MIN_PRICE or mp > settings.MAX_PRICE:
-        logger.info(f"Price {mp:.2f} outside [{settings.MIN_PRICE}, {settings.MAX_PRICE}]")
+        logger.info(f"Market price {mp:.2f} outside [{settings.MIN_PRICE}, {settings.MAX_PRICE}]")
+        return 0.0
+    if exec_price < settings.MIN_PRICE or exec_price > settings.MAX_PRICE:
+        logger.info(f"Exec price {exec_price:.2f} outside [{settings.MIN_PRICE}, {settings.MAX_PRICE}]")
         return 0.0
 
     # Minimum edge filter — require meaningful edge (covers spread + slippage)

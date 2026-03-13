@@ -37,6 +37,22 @@ _15M_SLUGS = {
     "xrp-updown-15m": "XRPUSDT",
 }
 
+# Slug prefixes for the 1-hour up/down markets
+_1H_SLUGS = {
+    "btc-updown-1h": "BTCUSDT",
+    "eth-updown-1h": "ETHUSDT",
+    "sol-updown-1h": "SOLUSDT",
+    "xrp-updown-1h": "XRPUSDT",
+}
+
+# Slug prefixes for the 4-hour up/down markets
+_4H_SLUGS = {
+    "btc-updown-4h": "BTCUSDT",
+    "eth-updown-4h": "ETHUSDT",
+    "sol-updown-4h": "SOLUSDT",
+    "xrp-updown-4h": "XRPUSDT",
+}
+
 # Daily markets use a different slug format: {coin}-up-or-down-{month}-{day}-{time}-et
 _DAILY_SLUG_MAP = {
     "bitcoin": "BTCUSDT",
@@ -60,6 +76,21 @@ def _current_5m_windows() -> list[int]:
     minute = now_et.minute
     window_start_min = (minute // 5) * 5
     window_start = now_et.replace(minute=window_start_min, second=0, microsecond=0)
+    return [int(window_start.timestamp())]
+
+
+def _current_1h_windows() -> list[int]:
+    """Return unix timestamps for the current 1-hour window start time."""
+    now_et = datetime.now(_ET)
+    window_start = now_et.replace(minute=0, second=0, microsecond=0)
+    return [int(window_start.timestamp())]
+
+
+def _current_4h_windows() -> list[int]:
+    """Return unix timestamps for the current 4-hour window start time."""
+    now_et = datetime.now(_ET)
+    hour_block = (now_et.hour // 4) * 4
+    window_start = now_et.replace(hour=hour_block, minute=0, second=0, microsecond=0)
     return [int(window_start.timestamp())]
 
 
@@ -208,6 +239,86 @@ async def fetch_live_15m_markets() -> list[MarketInfo]:
                 logger.debug(f"Failed to fetch {slug}: {e}")
 
     logger.info(f"Found {len(markets)} live 15M markets")
+    return markets
+
+
+async def fetch_live_1h_markets() -> list[MarketInfo]:
+    """Fetch currently-live 1-hour up/down markets from Gamma events API."""
+    markets: list[MarketInfo] = []
+    timestamps = _current_1h_windows()
+
+    async with httpx.AsyncClient(timeout=15) as client:
+        tasks = []
+        for slug_prefix, symbol in _1H_SLUGS.items():
+            for ts in timestamps:
+                slug = f"{slug_prefix}-{ts}"
+                tasks.append((slug, symbol, client.get(
+                    f"{settings.GAMMA_HOST}/events",
+                    params={"slug": slug},
+                )))
+
+        for slug, symbol, coro in tasks:
+            try:
+                resp = await coro
+                if resp.status_code != 200:
+                    continue
+
+                data = resp.json()
+                events = data if isinstance(data, list) else [data]
+
+                if not events or not events[0]:
+                    continue
+
+                info = _parse_event_market(events[0])
+                if info:
+                    info.category = symbol
+                    markets.append(info)
+                    logger.debug(f"Found 1H market: {info.question} ({symbol})")
+
+            except Exception as e:
+                logger.debug(f"Failed to fetch {slug}: {e}")
+
+    logger.info(f"Found {len(markets)} live 1H markets")
+    return markets
+
+
+async def fetch_live_4h_markets() -> list[MarketInfo]:
+    """Fetch currently-live 4-hour up/down markets from Gamma events API."""
+    markets: list[MarketInfo] = []
+    timestamps = _current_4h_windows()
+
+    async with httpx.AsyncClient(timeout=15) as client:
+        tasks = []
+        for slug_prefix, symbol in _4H_SLUGS.items():
+            for ts in timestamps:
+                slug = f"{slug_prefix}-{ts}"
+                tasks.append((slug, symbol, client.get(
+                    f"{settings.GAMMA_HOST}/events",
+                    params={"slug": slug},
+                )))
+
+        for slug, symbol, coro in tasks:
+            try:
+                resp = await coro
+                if resp.status_code != 200:
+                    continue
+
+                data = resp.json()
+                events = data if isinstance(data, list) else [data]
+
+                if not events or not events[0]:
+                    continue
+
+                info = _parse_event_market(events[0])
+                if info:
+                    info.category = symbol
+                    markets.append(info)
+                    logger.debug(f"Found 4H market: {info.question} ({symbol})")
+
+            except Exception as e:
+                logger.debug(f"Failed to fetch {slug}: {e}")
+
+    logger.info(f"Found {len(markets)} live 4H markets")
     return markets
 
 

@@ -47,6 +47,14 @@ class PriceFeed:
         self._window_opens_15m: dict[str, float] = {}
         self._current_window_ts_15m: int = 0
 
+        # 1-hour window tracking
+        self._window_opens_1h: dict[str, float] = {}
+        self._current_window_ts_1h: int = 0
+
+        # 4-hour window tracking
+        self._window_opens_4h: dict[str, float] = {}
+        self._current_window_ts_4h: int = 0
+
         # Daily window tracking (price at midnight ET)
         self._daily_opens: dict[str, float] = {}
         self._current_day: str = ""  # "YYYY-MM-DD"
@@ -83,6 +91,8 @@ class PriceFeed:
         now = time.time()
         self._current_window_ts = int(now // 300) * 300
         self._current_window_ts_15m = int(now // 900) * 900
+        self._current_window_ts_1h = int(now // 3600) * 3600
+        self._current_window_ts_4h = int(now // 14400) * 14400
         from datetime import datetime
         from zoneinfo import ZoneInfo
         _et = ZoneInfo("America/New_York")
@@ -91,6 +101,8 @@ class PriceFeed:
             if symbol in self.current_prices:
                 self._window_opens[symbol] = self.current_prices[symbol]
                 self._window_opens_15m[symbol] = self.current_prices[symbol]
+                self._window_opens_1h[symbol] = self.current_prices[symbol]
+                self._window_opens_4h[symbol] = self.current_prices[symbol]
                 self._daily_opens[symbol] = self.current_prices[symbol]
                 logger.info(f"Seeded window open for {symbol}: ${self.current_prices[symbol]:.2f}")
 
@@ -119,6 +131,24 @@ class PriceFeed:
                     self._window_opens_15m[sym] = self.current_prices[sym]
             logger.info(f"New 15-min window at {window_ts_15m}")
 
+        # ── 1-hour boundary ──
+        window_ts_1h = int(now // 3600) * 3600
+        if window_ts_1h != self._current_window_ts_1h:
+            self._current_window_ts_1h = window_ts_1h
+            for sym in SYMBOLS:
+                if sym in self.current_prices:
+                    self._window_opens_1h[sym] = self.current_prices[sym]
+            logger.info(f"New 1-hour window at {window_ts_1h}")
+
+        # ── 4-hour boundary ──
+        window_ts_4h = int(now // 14400) * 14400
+        if window_ts_4h != self._current_window_ts_4h:
+            self._current_window_ts_4h = window_ts_4h
+            for sym in SYMBOLS:
+                if sym in self.current_prices:
+                    self._window_opens_4h[sym] = self.current_prices[sym]
+            logger.info(f"New 4-hour window at {window_ts_4h}")
+
         # ── Daily boundary (midnight ET) ──
         from datetime import datetime
         from zoneinfo import ZoneInfo
@@ -135,6 +165,10 @@ class PriceFeed:
             self._window_opens[symbol] = price
         if symbol not in self._window_opens_15m and price > 0:
             self._window_opens_15m[symbol] = price
+        if symbol not in self._window_opens_1h and price > 0:
+            self._window_opens_1h[symbol] = price
+        if symbol not in self._window_opens_4h and price > 0:
+            self._window_opens_4h[symbol] = price
         if symbol not in self._daily_opens and price > 0:
             self._daily_opens[symbol] = price
 
@@ -195,6 +229,22 @@ class PriceFeed:
         """Get price change from the current 15-min window open to now."""
         current = self.current_prices.get(symbol, 0.0)
         window_open = self._window_opens_15m.get(symbol, 0.0)
+        if window_open <= 0 or current <= 0:
+            return 0.0
+        return (current - window_open) / window_open
+
+    def get_window_delta_1h(self, symbol: str) -> float:
+        """Get price change from the current 1-hour window open to now."""
+        current = self.current_prices.get(symbol, 0.0)
+        window_open = self._window_opens_1h.get(symbol, 0.0)
+        if window_open <= 0 or current <= 0:
+            return 0.0
+        return (current - window_open) / window_open
+
+    def get_window_delta_4h(self, symbol: str) -> float:
+        """Get price change from the current 4-hour window open to now."""
+        current = self.current_prices.get(symbol, 0.0)
+        window_open = self._window_opens_4h.get(symbol, 0.0)
         if window_open <= 0 or current <= 0:
             return 0.0
         return (current - window_open) / window_open

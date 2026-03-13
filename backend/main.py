@@ -23,9 +23,9 @@ from fastapi.staticfiles import StaticFiles
 from backend.bot.agent import TradingAgent, StrategyState
 from backend.bot.client import polymarket
 from backend.bot.executor import Executor
-from backend.bot.strategy import analyze_market as v2_strategy, is_5m_updown_market, is_15m_updown_market, is_daily_updown_market
+from backend.bot.strategy import analyze_market as v2_strategy, is_5m_updown_market, is_15m_updown_market, is_1h_updown_market, is_4h_updown_market, is_daily_updown_market
 from backend.bot.strategy_v1 import analyze_market_v1 as v1_strategy
-from backend.bot.claude_strategy import analyze_market_claude, claude_strategy
+from backend.bot.enhanced_strategy import analyze_market_enhanced
 from backend.config import settings
 from backend.models import (
     ActivityEvent,
@@ -38,7 +38,7 @@ from backend.models import (
     Timeframe,
 )
 from backend.services.db import persist_trade, persist_pnl_snapshot, fetch_pnl_history
-from backend.services.market_scanner import fetch_live_5m_markets, fetch_live_15m_markets, fetch_daily_markets, fetch_crypto_markets
+from backend.services.market_scanner import fetch_live_5m_markets, fetch_live_15m_markets, fetch_live_1h_markets, fetch_live_4h_markets, fetch_daily_markets, fetch_crypto_markets
 from backend.services.portfolio import compute_metrics_from_polymarket, fetch_raw_positions, fetch_raw_trades, sync_balance, sync_positions_for_agent, cleanup_settled_positions
 from backend.services.price_feed import price_feed
 
@@ -187,7 +187,7 @@ def build_competition_state() -> CompetitionState:
         )
 
     return CompetitionState(
-        alpha=_agent_state(claude_agent) if claude_agent else AgentState(agent_id="alpha", label="Claude (Sonnet)"),
+        alpha=_agent_state(claude_agent) if claude_agent else AgentState(agent_id="alpha", label="Enhanced (v3)"),
         beta=AgentState(agent_id="beta", label="(inactive)"),
         bot_status=shared_bot_status,
         markets=shared_markets,
@@ -234,15 +234,24 @@ async def run_agent_cycle(
         # Compute per-market window delta and elapsed % based on market type
         is_5m = is_5m_updown_market(market.question)
         is_15m = is_15m_updown_market(market.question)
+        is_1h = is_1h_updown_market(market.question)
+        is_4h = is_4h_updown_market(market.question)
         is_daily = is_daily_updown_market(market.question)
 
-        if is_15m:
+        if is_4h:
+            market.window_delta = price_feed.get_window_delta_4h(symbol)
+            elapsed_seconds = (now_et.hour % 4) * 3600 + now_et.minute * 60 + now_et.second
+            window_elapsed_pct = elapsed_seconds / 14400.0
+        elif is_1h:
+            market.window_delta = price_feed.get_window_delta_1h(symbol)
+            elapsed_seconds = now_et.minute * 60 + now_et.second
+            window_elapsed_pct = elapsed_seconds / 3600.0
+        elif is_15m:
             market.window_delta = price_feed.get_window_delta_15m(symbol)
             elapsed_seconds = (now_et.minute % 15) * 60 + now_et.second
             window_elapsed_pct = elapsed_seconds / 900.0
         elif is_daily:
             market.window_delta = price_feed.get_window_delta_daily(symbol)
-            # Daily markets: elapsed since midnight ET, resolve at 11PM ET (23h window)
             seconds_since_midnight = now_et.hour * 3600 + now_et.minute * 60 + now_et.second
             window_elapsed_pct = min(seconds_since_midnight / (23 * 3600), 1.0)
         else:
@@ -253,7 +262,7 @@ async def run_agent_cycle(
 
         market.window_elapsed_pct = window_elapsed_pct
 
-        mkt_type = "15m" if is_15m else ("daily" if is_daily else "5m")
+        mkt_type = "4h" if is_4h else ("1h" if is_1h else ("15m" if is_15m else ("daily" if is_daily else "5m")))
         logger.info(
             f"[{agent.agent_id}] Analyzing: {market.question[:50]} ({symbol}) "
             f"Δ={market.window_delta:+.4f} elapsed={window_elapsed_pct:.0%} [{mkt_type}]"
@@ -339,8 +348,8 @@ async def bot_loop() -> None:
 
     claude_agent = TradingAgent(
         agent_id="alpha",
-        label="Claude (Sonnet)",
-        strategy_fn=analyze_market_claude,
+        label="Enhanced (v3)",
+        strategy_fn=analyze_market_enhanced,
         budget=AGENT_BUDGET,
     )
 
@@ -355,8 +364,8 @@ async def bot_loop() -> None:
     )
 
     emit_event(
-        None, "info", "Claude (Sonnet) agent started",
-        f"Budget: ${AGENT_BUDGET:.0f} | DRY_RUN={'ON' if settings.DRY_RUN else 'OFF'} | Model: {settings.ANTHROPIC_MODEL}",
+        None, "info", "Enhanced (v3) agent started",
+        f"Budget: ${AGENT_BUDGET:.0f} | DRY_RUN={'ON' if settings.DRY_RUN else 'OFF'} | Strategy: deterministic",
         icon="info", severity="info",
     )
 
@@ -385,8 +394,10 @@ async def bot_loop() -> None:
             # ── 1. Scan all market types (5m, 15m, daily) ──
             live_5m = await fetch_live_5m_markets()
             live_15m = await fetch_live_15m_markets()
+            live_1h = await fetch_live_1h_markets()
+            live_4h = await fetch_live_4h_markets()
             daily = await fetch_daily_markets()
-            all_markets = live_5m + live_15m + daily
+            all_markets = live_5m + live_15m + live_1h + live_4h + daily
             shared_markets = all_markets
             shared_bot_status.markets_tracked = len(all_markets)
             shared_bot_status.last_scan = datetime.now(timezone.utc)
@@ -396,6 +407,10 @@ async def bot_loop() -> None:
                 parts.append(f"{len(live_5m)} 5M")
             if live_15m:
                 parts.append(f"{len(live_15m)} 15M")
+            if live_1h:
+                parts.append(f"{len(live_1h)} 1H")
+            if live_4h:
+                parts.append(f"{len(live_4h)} 4H")
             if daily:
                 parts.append(f"{len(daily)} daily")
 
@@ -608,8 +623,8 @@ async def get_pnl_history(agent_id: str, limit: int = 500):
 
 @app.get("/api/claude/stats")
 async def get_claude_stats():
-    """Return Claude agent API usage stats."""
-    return claude_strategy.stats
+    """Return strategy stats (kept for API compat)."""
+    return {"total_calls": 0, "avg_latency_ms": 0, "cached_decisions": 0, "errors": 0}
 
 
 @app.get("/api/polymarket/trades")

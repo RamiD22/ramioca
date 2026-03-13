@@ -70,6 +70,18 @@ def is_15m_updown_market(question: str) -> bool:
     return "up or down" in q and "15m" in q
 
 
+def is_1h_updown_market(question: str) -> bool:
+    """Detect if this is a 1-hour up/down market."""
+    q = question.lower()
+    return "up or down" in q and "1h" in q
+
+
+def is_4h_updown_market(question: str) -> bool:
+    """Detect if this is a 4-hour up/down market."""
+    q = question.lower()
+    return "up or down" in q and "4h" in q
+
+
 def is_daily_updown_market(question: str) -> bool:
     """Detect if this is a daily up/down market (resolves at 11PM ET)."""
     q = question.lower()

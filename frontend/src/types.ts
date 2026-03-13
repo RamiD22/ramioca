@@ -118,9 +118,27 @@ export interface PnLSnapshot {
   total_trades: number
 }
 
+export interface PolymarketTrade {
+  id: string
+  market: string
+  asset_id: string
+  side: "BUY" | "SELL"
+  size: string
+  price: string
+  status: string
+  match_time: string
+  outcome: string
+  title: string
+  transaction_hash: string
+  type: string
+  fee_rate_bps: string
+  created_at: string
+}
+
 export interface CompetitionState {
   alpha: AgentState
   beta: AgentState
   bot_status: BotStatus
   markets: MarketInfo[]
+  polymarket_trades: PolymarketTrade[]
 }

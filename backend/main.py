@@ -58,6 +58,11 @@ beta_agent: TradingAgent | None = None
 shared_bot_status = BotStatus()
 shared_markets: list[MarketInfo] = []
 
+# Cached Polymarket trades (refreshed every 30s to avoid API spam)
+_polymarket_trades_cache: list[dict] = []
+_polymarket_trades_last_fetch: float = 0
+_POLYMARKET_TRADES_TTL = 30  # seconds
+
 MAX_ACTIVITY_EVENTS = 100
 
 
@@ -107,6 +112,19 @@ async def broadcast(data: dict) -> None:
     connected_clients.difference_update(dead)
 
 
+def _refresh_polymarket_trades() -> list[dict]:
+    """Return cached Polymarket trades, refreshing if stale."""
+    global _polymarket_trades_cache, _polymarket_trades_last_fetch
+    now = time.time()
+    if now - _polymarket_trades_last_fetch > _POLYMARKET_TRADES_TTL:
+        try:
+            _polymarket_trades_cache = polymarket.get_trades()
+            _polymarket_trades_last_fetch = now
+        except Exception as e:
+            logger.warning(f"Failed to fetch Polymarket trades: {e}")
+    return _polymarket_trades_cache
+
+
 def build_competition_state() -> CompetitionState:
     """Build the full competition state from both agents."""
     def _agent_state(agent: TradingAgent) -> AgentState:
@@ -125,6 +143,7 @@ def build_competition_state() -> CompetitionState:
         beta=_agent_state(beta_agent) if beta_agent else AgentState(agent_id="beta", label="Beta (v1)"),
         bot_status=shared_bot_status,
         markets=shared_markets,
+        polymarket_trades=_refresh_polymarket_trades(),
     )
 
 

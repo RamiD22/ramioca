@@ -3,6 +3,7 @@ import { Power, PowerOff, Wifi, WifiOff, FlaskConical } from "lucide-react"
 import CompetitionHeader from "./CompetitionHeader"
 import AgentPanel from "./AgentPanel"
 import MarketScanner from "./MarketScanner"
+import PolymarketTrades from "./PolymarketTrades"
 import type { CompetitionState } from "../types"
 import type { PnLHistory } from "../hooks/useWebSocket"
 
@@ -108,6 +109,13 @@ export default function Dashboard({ state, connected, onCommand, pnlHistory }: P
           <AgentPanel agent={beta} color="magenta" delay={0.15} pnlHistory={pnlHistory.beta} />
         )}
       </div>
+
+      {/* Real Polymarket Trades — full width */}
+      {state.polymarket_trades && state.polymarket_trades.length > 0 && (
+        <section className="mb-6">
+          <PolymarketTrades trades={state.polymarket_trades} />
+        </section>
+      )}
 
       {/* Shared Market Scanner — full width */}
       <section>

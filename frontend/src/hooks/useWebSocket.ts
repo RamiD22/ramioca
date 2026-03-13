@@ -32,6 +32,7 @@ const INITIAL_STATE: CompetitionState = {
     last_scan: null, markets_tracked: 0, errors: [],
   },
   markets: [],
+  polymarket_trades: [],
 }
 
 export interface PnLHistory {

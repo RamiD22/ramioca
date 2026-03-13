@@ -156,3 +156,4 @@ class CompetitionState(BaseModel):
     beta: AgentState
     bot_status: BotStatus = BotStatus()
     markets: list[MarketInfo] = []
+    polymarket_trades: list[dict] = []

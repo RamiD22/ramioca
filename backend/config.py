@@ -20,12 +20,12 @@ class Settings:
     SIGNATURE_TYPE: int = int(os.getenv("POLYMARKET_SIGNATURE_TYPE", "1"))
 
     # Risk parameters — pulled from your existing config
-    MAX_POSITION_SIZE: float = float(os.getenv("POLYMARKET_AGENT_MAX_MARKET_USDC", "10"))
+    MAX_POSITION_SIZE: float = float(os.getenv("POLYMARKET_AGENT_MAX_MARKET_USDC", "2"))
     MAX_TOTAL_EXPOSURE: float = float(os.getenv("POLYMARKET_AGENT_BUDGET_USDC", "200"))
     STOP_LOSS_PCT: float = float(os.getenv("POLYMARKET_AGENT_STOP_LOSS_PCT", "8")) / 100
     TAKE_PROFIT_PCT: float = float(os.getenv("POLYMARKET_AGENT_TAKE_PROFIT_PCT", "12")) / 100
     MAX_POSITIONS: int = int(os.getenv("POLYMARKET_AGENT_MAX_POSITIONS", "4"))
-    CLIP_SIZE: float = float(os.getenv("POLYMARKET_AGENT_CLIP_USDC", "10"))
+    CLIP_SIZE: float = float(os.getenv("POLYMARKET_AGENT_CLIP_USDC", "2"))
     DAILY_LOSS_LIMIT: float = float(os.getenv("POLYMARKET_AGENT_DAILY_LOSS_USDC", "15"))
 
     # Signal thresholds

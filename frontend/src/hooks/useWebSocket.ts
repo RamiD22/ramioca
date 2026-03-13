@@ -43,7 +43,7 @@ export interface PnLHistory {
 export function useWebSocket() {
   const [state, setState] = useState<CompetitionState>(INITIAL_STATE)
   const [connected, setConnected] = useState(false)
-  const [pnlHistory, setPnlHistory] = useState<PnLHistory>({ alpha: [], beta: [] })
+  const [pnlHistory] = useState<PnLHistory>({ alpha: [], beta: [] })
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
 
@@ -81,30 +81,9 @@ export function useWebSocket() {
     }
   }, [])
 
-  // Fetch historical PnL from Supabase on mount
+  // PnL history starts fresh — no old Supabase data loaded
   useEffect(() => {
-    async function fetchPnlHistory() {
-      try {
-        const [alphaRes, betaRes] = await Promise.all([
-          fetch("/api/agent/alpha/pnl-history?limit=500"),
-          fetch("/api/agent/beta/pnl-history?limit=500"),
-        ])
-        const [alphaData, betaData] = await Promise.all([
-          alphaRes.json(),
-          betaRes.json(),
-        ])
-        setPnlHistory({
-          alpha: alphaData.snapshots || [],
-          beta: betaData.snapshots || [],
-        })
-      } catch (err) {
-        console.warn("[PnL] Failed to fetch history:", err)
-      }
-    }
-    fetchPnlHistory()
-    // Refresh every 5 minutes
-    const interval = setInterval(fetchPnlHistory, 5 * 60 * 1000)
-    return () => clearInterval(interval)
+    // intentionally empty — preserves hook order
   }, [])
 
   useEffect(() => {

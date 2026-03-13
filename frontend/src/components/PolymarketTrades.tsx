@@ -30,7 +30,6 @@ export default function PolymarketTrades({ trades }: Props) {
 
   // Stats
   const totalCost = trades.reduce((s, t) => s + t.total_cost, 0)
-  const totalRev = trades.reduce((s, t) => s + t.total_revenue, 0)
   const totalPnl = trades.reduce((s, t) => s + t.pnl, 0)
   const winners = trades.filter(t => t.pnl > 0).length
   const losers = trades.filter(t => t.pnl < 0).length

@@ -224,6 +224,9 @@ async def run_agent_cycle(
     elapsed_seconds = (now_et.minute % 5) * 60 + now_et.second
     window_elapsed_pct = elapsed_seconds / 300.0  # 300s = 5 minutes
 
+    # ── Phase 1: Analyze all markets and collect signals ──
+    actionable_signals: list[StrategyOutput] = []
+
     for market in markets:
         symbol = market.category  # Set by scanner: "BTCUSDT", "ETHUSDT", etc.
 
@@ -244,44 +247,15 @@ async def run_agent_cycle(
         signals.append(signal)
 
         mkt_short = market.question[:55]
-
-        # Check if market price is in our tradeable range
         mp = signal.market_price
         in_range = settings.MIN_PRICE <= mp <= settings.MAX_PRICE
 
-        # Execute if there's an edge
         if signal.recommended_side is not None:
+            actionable_signals.append(signal)
             logger.info(
                 f"[{agent.agent_id}] SIGNAL: {signal.composite_signal} {signal.recommended_side} "
                 f"edge={signal.edge:.3f} on {market.question[:60]}"
             )
-
-            trade = agent.executor.execute_signal(signal)
-
-            if trade:
-                agent.owned_token_ids.add(signal.token_id)
-                # Track how much this agent invested in this token
-                agent.owned_sizes[signal.token_id] = agent.owned_sizes.get(signal.token_id, 0) + trade.size
-                persist_trade(trade, agent.agent_id)
-                emit_event(
-                    agent,
-                    "trade",
-                    f"{'🟢' if signal.recommended_side.value == 'BUY' else '🔴'} {signal.recommended_side.value} ${trade.size:.2f}",
-                    f"Edge: {signal.edge:.3f} | {signal.composite_signal.value} | Price: {trade.price:.4f}",
-                    market=mkt_short,
-                    icon=f"trade_{signal.recommended_side.value.lower()}",
-                    severity="success",
-                )
-            elif in_range:
-                emit_event(
-                    agent,
-                    "skip",
-                    f"Signal blocked by risk",
-                    f"{signal.composite_signal.value} {signal.recommended_side.value} edge={signal.edge:.3f} — filtered by risk checks",
-                    market=mkt_short,
-                    icon="skip",
-                    severity="warning",
-                )
         elif in_range:
             if abs(signal.edge) > 0.005:
                 emit_event(
@@ -292,6 +266,50 @@ async def run_agent_cycle(
                     market=mkt_short,
                     icon="signal",
                     severity="info",
+                )
+
+    # ── Phase 2: Focus-fire — only execute the BEST signal per cycle ──
+    # Concentrating on the strongest signal improves win rate vs spreading thin.
+    if actionable_signals:
+        # Pick the signal with the highest absolute edge
+        best = max(actionable_signals, key=lambda s: abs(s.edge))
+        mkt_short = best.market[:55]
+
+        # Log skipped signals
+        for s in actionable_signals:
+            if s is not best:
+                logger.info(
+                    f"[{agent.agent_id}] SKIP (not best): edge={s.edge:.3f} on {s.market[:50]} "
+                    f"(best={abs(best.edge):.3f})"
+                )
+
+        trade = agent.executor.execute_signal(best)
+
+        if trade:
+            agent.owned_token_ids.add(best.token_id)
+            agent.owned_sizes[best.token_id] = agent.owned_sizes.get(best.token_id, 0) + trade.size
+            persist_trade(trade, agent.agent_id)
+            emit_event(
+                agent,
+                "trade",
+                f"{'🟢' if best.recommended_side.value == 'BUY' else '🔴'} {best.recommended_side.value} ${trade.size:.2f}",
+                f"Edge: {best.edge:.3f} | {best.composite_signal.value} | Price: {trade.price:.4f} (best of {len(actionable_signals)})",
+                market=mkt_short,
+                icon=f"trade_{best.recommended_side.value.lower()}",
+                severity="success",
+            )
+        else:
+            mp = best.market_price
+            in_range = settings.MIN_PRICE <= mp <= settings.MAX_PRICE
+            if in_range:
+                emit_event(
+                    agent,
+                    "skip",
+                    f"Signal blocked by risk",
+                    f"{best.composite_signal.value} {best.recommended_side.value} edge={best.edge:.3f} — filtered by risk checks",
+                    market=mkt_short,
+                    icon="skip",
+                    severity="warning",
                 )
 
     agent.state.signals = signals

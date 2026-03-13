@@ -25,13 +25,14 @@ class Settings:
     STOP_LOSS_PCT: float = float(os.getenv("POLYMARKET_AGENT_STOP_LOSS_PCT", "8")) / 100
     TAKE_PROFIT_PCT: float = float(os.getenv("POLYMARKET_AGENT_TAKE_PROFIT_PCT", "12")) / 100
     MAX_POSITIONS: int = int(os.getenv("POLYMARKET_AGENT_MAX_POSITIONS", "4"))
-    CLIP_SIZE: float = float(os.getenv("POLYMARKET_AGENT_CLIP_USDC", "5"))
+    CLIP_SIZE: float = float(os.getenv("POLYMARKET_AGENT_CLIP_USDC", "10"))
     DAILY_LOSS_LIMIT: float = float(os.getenv("POLYMARKET_AGENT_DAILY_LOSS_USDC", "15"))
 
     # Signal thresholds
     MIN_SIGNAL: float = float(os.getenv("POLYMARKET_AGENT_MIN_SIGNAL", "0.56"))
     MIN_PRICE: float = float(os.getenv("POLYMARKET_AGENT_MIN_PRICE", "0.15"))
     MAX_PRICE: float = float(os.getenv("POLYMARKET_AGENT_MAX_PRICE", "0.85"))
+    MIN_CONFIDENCE: float = float(os.getenv("POLYMARKET_AGENT_MIN_CONFIDENCE", "0.70"))
     MIN_LIQUIDITY: float = float(os.getenv("POLYMARKET_AGENT_MIN_LIQUIDITY_USDC", "1500"))
     MIN_VOLUME_24H: float = float(os.getenv("POLYMARKET_AGENT_MIN_VOLUME24H_USDC", "2500"))
 

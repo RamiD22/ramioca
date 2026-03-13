@@ -29,6 +29,9 @@ class StrategyState:
     def __init__(self) -> None:
         self.last_trade_time: float = 0.0
         self.recent_outcomes: deque[bool] = deque(maxlen=20)
+        # Reference to parent agent's DashboardState (set by TradingAgent.__init__).
+        # Used by Claude strategy to access trades, metrics, positions.
+        self._agent_state: DashboardState | None = None
 
 
 class TradingAgent:
@@ -55,6 +58,7 @@ class TradingAgent:
 
         # Per-agent strategy state (cooldown, streaks)
         self.strategy_state = StrategyState()
+        self.strategy_state._agent_state = self.state
 
         # Per-agent executor (set after init)
         self.executor: Executor | None = None

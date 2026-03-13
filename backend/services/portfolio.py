@@ -22,74 +22,67 @@ def _safe(v: float) -> float:
     return v
 
 
-def compute_metrics(
-    state: DashboardState,
-    pnl_baseline: float | None = None,
-) -> tuple[PortfolioMetrics, float]:
-    """Compute portfolio metrics from current state.
+def compute_metrics_from_polymarket(
+    raw_positions: list[dict],
+    raw_trades: list[dict],
+    balance: float = 0.0,
+) -> PortfolioMetrics:
+    """Compute metrics from REAL Polymarket API data only.
 
-    Returns (metrics, pnl_baseline) — the baseline is set on first call
-    so the dashboard starts from $0 PnL.
+    raw_positions: from Data API /positions (contains cashPnl, size, curPrice)
+    raw_trades: from Data API /trades (contains actual executed trades)
     """
-    trades = state.recent_trades
-    positions = state.positions
+    # PnL: sum of cashPnl from all real positions
+    total_pnl = 0.0
+    total_exposure = 0.0
+    active_positions = 0
+    winning_positions = 0
+    losing_positions = 0
 
-    # Total PnL from trade outcomes — persists after 5-min markets settle.
-    # This replaces the old `sum(p.pnl for p in positions)` which reset to $0
-    # every time settled positions disappeared from the Polymarket API.
-    # Trade PnLs are kept up-to-date by run_agent_cycle():
-    #   - Active positions: trade.pnl = proportional position PnL (unrealized)
-    #   - Settled positions: trade.pnl retains last known value (realized)
-    total_pnl = sum(t.pnl for t in trades if t.pnl is not None)
+    for p in raw_positions:
+        size = float(p.get("size", 0))
+        if size < 0.01:
+            continue
 
-    # Baseline: always 0 so cumulative PnL persists across restarts.
-    # Trade history (with PnLs) is loaded from Supabase on startup,
-    # so total_pnl already reflects all historical gains/losses.
-    if pnl_baseline is None:
-        pnl_baseline = 0.0
-        logger.info(f"PnL baseline set: $0.00 (persistent mode — total_pnl=${total_pnl:.2f})")
+        cur_price = float(p.get("curPrice", 0))
+        cash_pnl = float(p.get("cashPnl", p.get("cashPnL", 0)))
 
-    adjusted_pnl = total_pnl - pnl_baseline
-    total_exposure = sum(p.size * p.current_price for p in positions)
+        total_pnl += cash_pnl
 
-    winning = [t for t in trades if t.pnl is not None and t.pnl > 0]
-    losing = [t for t in trades if t.pnl is not None and t.pnl < 0]
-    resolved = len(winning) + len(losing)
-    win_rate = len(winning) / resolved if resolved > 0 else 0.0
+        if cur_price > 0:
+            total_exposure += size * cur_price
+            active_positions += 1
 
-    # Simple Sharpe approximation from trade returns
-    returns = [t.pnl / t.size if t.size > 0 else 0 for t in trades if t.pnl is not None]
-    if len(returns) > 1:
-        sharpe = float(np.mean(returns) / np.std(returns)) if np.std(returns) > 0 else 0.0
-    else:
-        sharpe = 0.0
+        if cash_pnl > 0:
+            winning_positions += 1
+        elif cash_pnl < 0:
+            losing_positions += 1
 
-    # Max drawdown from cumulative PnL
-    cum_pnl = np.cumsum([t.pnl or 0 for t in reversed(trades)]) if trades else np.array([0])
-    peak = np.maximum.accumulate(cum_pnl) if len(cum_pnl) > 0 else np.array([0])
-    drawdowns = peak - cum_pnl
-    max_dd = float(np.max(drawdowns)) if len(drawdowns) > 0 else 0.0
+    resolved = winning_positions + losing_positions
+    win_rate = winning_positions / resolved if resolved > 0 else 0.0
 
-    avg_pnl = float(np.mean([t.pnl for t in trades if t.pnl is not None])) if trades else 0.0
+    total_trades = len(raw_trades)
 
-    balance = state.metrics.balance or 0.0
-
-    metrics = PortfolioMetrics(
+    return PortfolioMetrics(
         balance=_safe(balance),
-        total_pnl=_safe(round(adjusted_pnl, 2)),
-        total_pnl_pct=_safe(round((adjusted_pnl / balance) * 100, 2)) if balance > 0 else 0.0,
+        total_pnl=_safe(round(total_pnl, 2)),
+        total_pnl_pct=_safe(round((total_pnl / balance) * 100, 2)) if balance > 0 else 0.0,
         win_rate=_safe(round(win_rate, 4)),
-        total_trades=len(trades),
-        winning_trades=len(winning),
-        losing_trades=len(losing),
-        active_positions=sum(1 for p in positions if p.current_price > 0),
+        total_trades=total_trades,
+        winning_trades=winning_positions,
+        losing_trades=losing_positions,
+        active_positions=active_positions,
         total_exposure=_safe(round(total_exposure, 2)),
-        sharpe_ratio=_safe(round(sharpe, 3)),
-        max_drawdown=_safe(round(max_dd, 2)),
-        avg_trade_pnl=_safe(round(avg_pnl, 2)),
     )
 
-    return metrics, pnl_baseline
+
+def fetch_raw_trades() -> list[dict]:
+    """Fetch real trades from Polymarket Data API."""
+    try:
+        return polymarket.get_trades()
+    except Exception as e:
+        logger.error(f"Failed to fetch trades: {e}")
+        return []
 
 
 def fetch_raw_positions() -> list[dict]:

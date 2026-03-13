@@ -3,7 +3,6 @@ import MetricCards from "./MetricCards"
 import PnLChart from "./PnLChart"
 import ActivityLog from "./ActivityLog"
 import PositionsTable from "./PositionsTable"
-import RecentTrades from "./RecentTrades"
 import type { AgentState, PnLSnapshot } from "../types"
 
 interface Props {
@@ -51,9 +50,6 @@ export default function AgentPanel({ agent, color, delay = 0, pnlHistory }: Prop
 
       {/* Positions */}
       <PositionsTable positions={agent.positions} compact />
-
-      {/* Recent Trades */}
-      <RecentTrades trades={agent.recent_trades} compact />
 
       {/* Activity Log */}
       <ActivityLog events={agent.activity_log || []} compact />

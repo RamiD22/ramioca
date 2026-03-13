@@ -47,8 +47,8 @@ TF_WEIGHTS_5M = {
     Timeframe.H4: 0.10,
 }
 
-# Minimum edge required to trade (2% — filters noise while allowing real signals)
-MIN_EDGE = 0.02
+# Minimum edge required to trade (4% — higher bar for quality signals)
+MIN_EDGE = 0.04
 
 # Cooldown: minimum seconds between trades
 MIN_TRADE_INTERVAL = 2
@@ -381,13 +381,13 @@ def analyze_market(
     w_elapsed = market.window_elapsed_pct
 
     if is_5m and abs(w_delta) > 0.0005 and w_elapsed > 0.30:
-        # Window delta dominates: weight it 5x over technical indicators
-        # Scale by elapsed time (more confident later in window)
-        elapsed_boost = 1.0 + w_elapsed * 1.0  # 1.3x at 30%, 1.8x at 80%
-        delta_score = np.clip(w_delta * 400, -0.8, 0.8) * elapsed_boost
+        # Window delta dominates — it's the primary predictor for 5-min markets.
+        # Technical indicators on prediction token prices add noise, not signal.
+        elapsed_boost = 1.0 + w_elapsed * 1.5  # 1.75x at 50%, 2.2x at 80%
+        delta_score = np.clip(w_delta * 500, -0.9, 0.9) * elapsed_boost
 
-        # Blend: 70% window delta + 30% technical indicators
-        weighted_score = 0.70 * delta_score + 0.30 * weighted_score
+        # Blend: 90% window delta + 10% technical indicators
+        weighted_score = 0.90 * delta_score + 0.10 * weighted_score
 
         logger.info(
             f"Window delta signal: Δ={w_delta:+.4f} elapsed={w_elapsed:.0%} "
@@ -432,12 +432,11 @@ def analyze_market(
         )
 
     # ── Timing gate for 5-min markets ──
-    # Only trade after 40% of window has elapsed (2+ minutes in)
-    # Earlier trades are noise; later trades have confirmed direction
-    # Also STOP trading after 85% elapsed — market is nearly resolved,
-    # order book prices are at extremes (0.01/0.99), guaranteed losers.
-    if is_5m and (w_elapsed < 0.40 or w_elapsed > 0.85):
-        if w_elapsed > 0.85:
+    # Only trade between 50-80% elapsed (2.5-4 min into the window).
+    # Before 50%: not enough data, direction unclear.
+    # After 80%: prices at extremes, no edge left.
+    if is_5m and (w_elapsed < 0.50 or w_elapsed > 0.80):
+        if w_elapsed > 0.80:
             logger.debug(f"Skip {market.question[:40]} — {w_elapsed:.0%} elapsed (too close to resolution)")
         return StrategyOutput(
             token_id=token_id, market=market.question, signals=signals,

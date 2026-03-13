@@ -62,6 +62,15 @@ def calculate_position_size(
     if edge < 0.015:
         return 0.0
 
+    # ── Confidence gate — only trade when model is confident ──
+    if signal.recommended_side == Side.BUY:
+        confidence = signal.probability_estimate
+    else:
+        confidence = 1.0 - signal.probability_estimate
+    if confidence < settings.MIN_CONFIDENCE:
+        logger.info(f"Confidence {confidence:.1%} < {settings.MIN_CONFIDENCE:.1%} — skip")
+        return 0.0
+
     # Win probability
     if signal.recommended_side == Side.BUY:
         win_prob = signal.probability_estimate
@@ -80,15 +89,17 @@ def calculate_position_size(
 
     kelly = (odds * win_prob - (1 - win_prob)) / odds
 
-    # Fixed 1% of balance per trade — keep trades small
-    fraction = 0.01
+    # ── Graduated sizing — scale with confidence ──
+    # 70-80% confidence: half clip ($5), 80%+: full clip ($10)
+    if confidence >= 0.80:
+        max_size = settings.CLIP_SIZE
+    else:
+        max_size = settings.CLIP_SIZE * 0.5
 
+    fraction = 0.10
     size = balance * fraction
-    # Cap by clip size (hard per-trade max)
-    size = min(size, settings.CLIP_SIZE)
-    # Cap by per-market max
+    size = min(size, max_size)
     size = min(size, settings.MAX_POSITION_SIZE)
-    # Cap by remaining exposure
     size = min(size, remaining)
     size = round(size, 2)
 
@@ -96,7 +107,7 @@ def calculate_position_size(
         return 0.0
 
     logger.info(
-        f"Size: ${size:.2f} | edge={edge:.3f} clip=${settings.CLIP_SIZE}"
+        f"Size: ${size:.2f} | conf={confidence:.1%} edge={edge:.3f} clip=${max_size:.0f}"
     )
     return size
 

@@ -22,13 +22,12 @@ function formatUptime(seconds: number): string {
 }
 
 export default function Dashboard({ state, connected, onCommand, pnlHistory }: Props) {
-  const { alpha, beta, bot_status, markets: _markets } = state
+  const { alpha, bot_status, markets: _markets } = state
 
-  // Merge signals from both agents for the market scanner
-  const allSignals = [...(alpha?.signals || []), ...(beta?.signals || [])]
+  const allSignals = alpha?.signals || []
 
   return (
-    <div className="min-h-screen p-4 md:p-6 lg:p-8 max-w-[1800px] mx-auto">
+    <div className="min-h-screen p-4 md:p-6 lg:p-8 max-w-[1400px] mx-auto">
       {/* Header */}
       <motion.header
         initial={{ opacity: 0, y: -20 }}
@@ -95,20 +94,17 @@ export default function Dashboard({ state, connected, onCommand, pnlHistory }: P
         </div>
       </motion.header>
 
-      {/* Competition Header — Alpha vs Beta scoreboard */}
-      {alpha && beta && (
-        <CompetitionHeader alpha={alpha} beta={beta} />
+      {/* Claude Agent Header */}
+      {alpha && (
+        <CompetitionHeader alpha={alpha} />
       )}
 
-      {/* Side-by-side Agent Panels */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-        {alpha && (
+      {/* Single Agent Panel — full width */}
+      {alpha && (
+        <div className="mb-6">
           <AgentPanel agent={alpha} color="cyan" delay={0.1} pnlHistory={pnlHistory.alpha} />
-        )}
-        {beta && (
-          <AgentPanel agent={beta} color="magenta" delay={0.15} pnlHistory={pnlHistory.beta} />
-        )}
-      </div>
+        </div>
+      )}
 
       {/* Real Polymarket Trades — full width */}
       {state.polymarket_trades && state.polymarket_trades.length > 0 && (
@@ -117,7 +113,7 @@ export default function Dashboard({ state, connected, onCommand, pnlHistory }: P
         </section>
       )}
 
-      {/* Shared Market Scanner — full width */}
+      {/* Market Scanner — full width */}
       <section>
         <MarketScanner signals={allSignals} />
       </section>
@@ -129,7 +125,7 @@ export default function Dashboard({ state, connected, onCommand, pnlHistory }: P
         transition={{ delay: 0.6 }}
         className="mt-8 flex items-center justify-between text-[10px] font-mono text-white/15 px-2"
       >
-        <span>RAMIOCA v2.0 | Dual-Agent Competition</span>
+        <span>RAMIOCA v3.0 | Claude Opus Agent</span>
         <span>{bot_status?.markets_tracked || 0} markets tracked</span>
         <span>
           {bot_status?.last_scan

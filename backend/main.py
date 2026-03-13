@@ -25,6 +25,7 @@ from backend.bot.client import polymarket
 from backend.bot.executor import Executor
 from backend.bot.strategy import analyze_market as v2_strategy
 from backend.bot.strategy_v1 import analyze_market_v1 as v1_strategy
+from backend.bot.claude_strategy import analyze_market_claude, claude_strategy
 from backend.config import settings
 from backend.models import (
     ActivityEvent,
@@ -35,33 +36,30 @@ from backend.models import (
     MarketInfo,
     Timeframe,
 )
-from backend.services.db import persist_trade, persist_pnl_snapshot, update_trade_pnl, fetch_pnl_history, load_agent_history
+from backend.services.db import persist_trade, persist_pnl_snapshot, fetch_pnl_history
 from backend.services.market_scanner import fetch_live_5m_markets, fetch_crypto_markets
-from backend.services.portfolio import compute_metrics, fetch_raw_positions, sync_balance, sync_positions_for_agent, cleanup_settled_positions
+from backend.services.portfolio import compute_metrics_from_polymarket, fetch_raw_positions, fetch_raw_trades, sync_balance, sync_positions_for_agent, cleanup_settled_positions
 from backend.services.price_feed import price_feed
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 # ── Global state ──
-AGENT_BUDGET = 250.0  # $250 each from $500 total
+AGENT_BUDGET = 500.0  # Full budget for single Claude agent
 
 connected_clients: set[WebSocket] = set()
 bot_start_time: float = 0
 bot_running = False
 
-# The two agents — initialized in bot_loop()
-alpha_agent: TradingAgent | None = None
-beta_agent: TradingAgent | None = None
+# Single Claude agent — initialized in bot_loop()
+claude_agent: TradingAgent | None = None
 
 # Shared bot status
 shared_bot_status = BotStatus()
 shared_markets: list[MarketInfo] = []
 
-# Cached Polymarket trades (refreshed every 30s to avoid API spam)
+# Cached real Polymarket trades (updated each bot cycle)
 _polymarket_trades_cache: list[dict] = []
-_polymarket_trades_last_fetch: float = 0
-_POLYMARKET_TRADES_TTL = 30  # seconds
 
 MAX_ACTIVITY_EVENTS = 100
 
@@ -91,13 +89,9 @@ def emit_event(
         agent.state.activity_log.insert(0, event)
         agent.state.activity_log = agent.state.activity_log[:MAX_ACTIVITY_EVENTS]
     else:
-        # Shared events go to both agents
-        if alpha_agent:
-            alpha_agent.state.activity_log.insert(0, event)
-            alpha_agent.state.activity_log = alpha_agent.state.activity_log[:MAX_ACTIVITY_EVENTS]
-        if beta_agent:
-            beta_agent.state.activity_log.insert(0, event)
-            beta_agent.state.activity_log = beta_agent.state.activity_log[:MAX_ACTIVITY_EVENTS]
+        if claude_agent:
+            claude_agent.state.activity_log.insert(0, event)
+            claude_agent.state.activity_log = claude_agent.state.activity_log[:MAX_ACTIVITY_EVENTS]
 
 
 async def broadcast(data: dict) -> None:
@@ -112,21 +106,75 @@ async def broadcast(data: dict) -> None:
     connected_clients.difference_update(dead)
 
 
-def _refresh_polymarket_trades() -> list[dict]:
-    """Return cached Polymarket trades, refreshing if stale."""
-    global _polymarket_trades_cache, _polymarket_trades_last_fetch
-    now = time.time()
-    if now - _polymarket_trades_last_fetch > _POLYMARKET_TRADES_TTL:
-        try:
-            _polymarket_trades_cache = polymarket.get_trades()
-            _polymarket_trades_last_fetch = now
-        except Exception as e:
-            logger.warning(f"Failed to fetch Polymarket trades: {e}")
-    return _polymarket_trades_cache
+def _get_polymarket_trades() -> list[dict]:
+    """Return cached Polymarket trades grouped by market with PnL."""
+    return _compute_market_pnl(_polymarket_trades_cache)
+
+
+def _compute_market_pnl(trades: list[dict]) -> list[dict]:
+    """Group trades by conditionId+outcome, compute per-market PnL."""
+    from collections import defaultdict
+
+    groups: dict[str, list[dict]] = defaultdict(list)
+    for t in trades:
+        key = f"{t.get('conditionId', '')}_{t.get('outcomeIndex', 0)}"
+        groups[key].append(t)
+
+    positions = []
+    for _key, group_trades in groups.items():
+        group_trades.sort(key=lambda x: x.get("timestamp", 0))
+
+        total_bought_shares = 0.0
+        total_bought_cost = 0.0
+        total_sold_shares = 0.0
+        total_sold_revenue = 0.0
+
+        enriched_trades = []
+        for t in group_trades:
+            shares = float(t.get("size", 0))
+            price = float(t.get("price", 0))
+            usdc = round(shares * price, 2)
+            enriched_trades.append({
+                "side": t.get("side", ""),
+                "shares": round(shares, 2),
+                "price": round(price, 4),
+                "usdc": usdc,
+                "timestamp": t.get("timestamp", 0),
+                "transactionHash": t.get("transactionHash", ""),
+            })
+            if t.get("side") == "BUY":
+                total_bought_shares += shares
+                total_bought_cost += usdc
+            else:
+                total_sold_shares += shares
+                total_sold_revenue += usdc
+
+        net_shares = total_bought_shares - total_sold_shares
+        realized_pnl = total_sold_revenue - total_bought_cost
+        avg_entry = total_bought_cost / total_bought_shares if total_bought_shares > 0 else 0
+
+        latest = group_trades[-1]
+        positions.append({
+            "title": latest.get("title", ""),
+            "outcome": latest.get("outcome", ""),
+            "slug": latest.get("slug", ""),
+            "total_cost": round(total_bought_cost, 2),
+            "total_revenue": round(total_sold_revenue, 2),
+            "net_shares": round(net_shares, 2),
+            "avg_entry": round(avg_entry, 4),
+            "pnl": round(realized_pnl, 2),
+            "status": "closed" if net_shares < 0.5 else "open",
+            "trade_count": len(group_trades),
+            "last_trade_time": latest.get("timestamp", 0),
+            "trades": enriched_trades,
+        })
+
+    positions.sort(key=lambda x: x["last_trade_time"], reverse=True)
+    return positions
 
 
 def build_competition_state() -> CompetitionState:
-    """Build the full competition state from both agents."""
+    """Build the dashboard state — Claude agent in alpha slot, beta empty."""
     def _agent_state(agent: TradingAgent) -> AgentState:
         return AgentState(
             agent_id=agent.agent_id,
@@ -139,105 +187,25 @@ def build_competition_state() -> CompetitionState:
         )
 
     return CompetitionState(
-        alpha=_agent_state(alpha_agent) if alpha_agent else AgentState(agent_id="alpha", label="Alpha (v2)"),
-        beta=_agent_state(beta_agent) if beta_agent else AgentState(agent_id="beta", label="Beta (v1)"),
+        alpha=_agent_state(claude_agent) if claude_agent else AgentState(agent_id="alpha", label="Claude (Opus)"),
+        beta=AgentState(agent_id="beta", label="(inactive)"),
         bot_status=shared_bot_status,
         markets=shared_markets,
-        polymarket_trades=_refresh_polymarket_trades(),
+        polymarket_trades=_get_polymarket_trades(),
     )
 
 
-def _resolve_trade_pnls(agent: TradingAgent, raw_positions: list[dict]) -> None:
-    """Resolve PnL for all trades — called BEFORE cleanup so token_ids are intact.
-
-    For binary 5-min markets the outcome is simple:
-      - Token resolves to $1 → BUY wins: PnL = size * (1 - price)
-      - Token resolves to $0 → BUY loses: PnL = -size * price
-
-    Resolution strategies (NEVER guess — only resolve when we have evidence):
-      1. Position active in API at normal price → unrealized PnL from position
-      2. Position at extreme price (≥0.95 or ≤0.05) → compute binary PnL
-      3. Position gone, but had unrealized PnL from step 1 → settle with last known
-      4. Position gone, never observed → leave unknown (pnl stays None)
-    """
-    # Build lookup of current API positions by token_id
-    api_positions: dict[str, dict] = {}
-    for p in raw_positions:
-        tid = p.get("asset", "")
-        if tid:
-            api_positions[tid] = p
-
-    # Build lookup of active positions (synced from API)
-    pos_map = {p.token_id: p for p in agent.state.positions}
-
-    for trade in agent.state.recent_trades:
-        if trade.status == "settled":
-            continue  # Already resolved — skip
-
-        pos = pos_map.get(trade.token_id)
-        api_pos = api_positions.get(trade.token_id)
-
-        if pos and pos.current_price > 0.05 and pos.current_price < 0.95:
-            # ── Case 1: Position active, mid-range price → unrealized PnL ──
-            trade.status = "filled"
-            if pos.size > 0:
-                trade.pnl = round(pos.pnl * (trade.size / pos.size), 4)
-                update_trade_pnl(trade.id, trade.pnl, trade.status)
-
-        elif pos and (pos.current_price >= 0.95 or pos.current_price <= 0.05):
-            # ── Case 2a: Position exists at extreme price → resolved ──
-            if pos.current_price >= 0.95:
-                trade.pnl = round(trade.size * (1.0 - trade.price), 4)
-            else:
-                trade.pnl = round(-trade.size * trade.price, 4)
-            trade.status = "settled"
-            update_trade_pnl(trade.id, trade.pnl, trade.status)
-            logger.info(
-                f"[{agent.agent_id}] Settled {trade.id[:12]}… "
-                f"{'WIN' if trade.pnl > 0 else 'LOSS'} ${trade.pnl:+.2f} | {trade.market[:40]}"
-            )
-
-        elif api_pos and trade.token_id in agent.owned_token_ids:
-            # ── Case 2b: In raw API, check curPrice for resolution ──
-            cur_price = float(api_pos.get("curPrice", 0.5))
-            if cur_price >= 0.95:
-                trade.pnl = round(trade.size * (1.0 - trade.price), 4)
-                trade.status = "settled"
-            elif cur_price <= 0.05:
-                trade.pnl = round(-trade.size * trade.price, 4)
-                trade.status = "settled"
-            else:
-                continue  # Still mid-range — wait
-            update_trade_pnl(trade.id, trade.pnl, trade.status)
-            logger.info(
-                f"[{agent.agent_id}] Settled {trade.id[:12]}… "
-                f"{'WIN' if trade.pnl > 0 else 'LOSS'} ${trade.pnl:+.2f} | {trade.market[:40]}"
-            )
-
-        elif trade.token_id in agent.owned_token_ids and not api_pos:
-            # ── Case 3: Gone from API entirely ──
-            if trade.pnl is not None:
-                # Had PnL from when position was live — keep & settle
-                trade.status = "settled"
-                update_trade_pnl(trade.id, trade.pnl, trade.status)
-                logger.info(
-                    f"[{agent.agent_id}] Settled {trade.id[:12]}… "
-                    f"(last known) ${trade.pnl:+.2f} | {trade.market[:40]}"
-                )
-            # else: Never observed position — leave pnl as None (don't guess)
 
 
 async def run_agent_cycle(
     agent: TradingAgent,
     markets: list[MarketInfo],
     raw_positions: list[dict],
+    raw_trades: list[dict],
 ) -> None:
     """Run one cycle for a single agent: analyze → execute → update."""
-    # Sync positions for this agent (proportioned by agent's invested size)
+    # Sync only positions that Claude owns (filtered by owned_token_ids)
     sync_positions_for_agent(agent.state, agent.owned_token_ids, raw_positions, agent.owned_sizes)
-
-    # ── Resolve trade PnLs BEFORE cleanup (so we still have token_ids) ──
-    _resolve_trade_pnls(agent, raw_positions)
 
     # Clean up settled/expired positions from ownership tracking
     settled_tokens = cleanup_settled_positions(raw_positions, agent.owned_token_ids)
@@ -246,9 +214,6 @@ async def run_agent_cycle(
         for tid in settled_tokens:
             agent.owned_sizes.pop(tid, None)
         logger.info(f"[{agent.agent_id}] Cleaned up {len(settled_tokens)} settled positions")
-
-    # Virtual balance: budget + PnL from positions
-    agent.state.metrics.balance = agent.budget
 
     # Run strategy on each live 5-minute market
     # Markets arrive pre-filtered from fetch_live_5m_markets() — symbol in market.category
@@ -336,60 +301,42 @@ async def run_agent_cycle(
     for cid in stopped:
         emit_event(agent, "stop_loss", "Position closed", f"Condition {cid[:12]}...", icon="stop", severity="warning")
 
-    # Update metrics
-    metrics, agent.pnl_baseline = compute_metrics(agent.state, agent.pnl_baseline)
+    # Update metrics from REAL Polymarket data (only Claude's positions + trades)
+    owned_positions = [p for p in raw_positions if p.get("asset", "") in agent.owned_token_ids]
+    owned_trades = [t for t in raw_trades if t.get("asset", "") in agent.owned_token_ids]
+    metrics = compute_metrics_from_polymarket(owned_positions, owned_trades, balance=agent.budget)
     agent.state.metrics = metrics
     persist_pnl_snapshot(agent.agent_id, metrics)
 
 
 async def bot_loop() -> None:
-    """Main trading bot loop — runs both agents sequentially per cycle."""
-    global bot_running, alpha_agent, beta_agent, shared_bot_status, shared_markets
+    """Main trading bot loop — single Claude agent."""
+    global bot_running, claude_agent, shared_bot_status, shared_markets
     bot_running = True
 
-    logger.info("Bot loop started (dry_run=%s, dual-agent mode)", settings.DRY_RUN)
+    logger.info("Bot loop started (dry_run=%s, Claude Opus agent)", settings.DRY_RUN)
 
-    # ── Create agents ──
-    alpha_agent = TradingAgent(
+    # ── Create Claude agent ──
+    claude_agent = TradingAgent(
         agent_id="alpha",
-        label="Alpha (v2)",
-        strategy_fn=v2_strategy,
-        budget=AGENT_BUDGET,
-    )
-    beta_agent = TradingAgent(
-        agent_id="beta",
-        label="Beta (v1)",
-        strategy_fn=v1_strategy,
+        label="Claude (Opus)",
+        strategy_fn=analyze_market_claude,
         budget=AGENT_BUDGET,
     )
 
-    # ── Restore trade history from Supabase ──
-    for agent in [alpha_agent, beta_agent]:
-        history = load_agent_history(agent.agent_id)
-        if history["trades"]:
-            agent.state.recent_trades = history["trades"]
-            agent.owned_token_ids = history["owned_token_ids"]
-            agent.owned_sizes = history["owned_sizes"]
-            logger.info(
-                f"[{agent.agent_id}] Restored {len(history['trades'])} trades, "
-                f"{len(history['owned_token_ids'])} token_ids from DB"
-            )
+    # Start fresh — no old trade history loading.
+    # Metrics come from real Polymarket API positions, not internal records.
 
-    # Initialize executors with per-agent budget caps
-    alpha_agent.executor = Executor(
-        alpha_agent.state,
-        strategy_state=alpha_agent.strategy_state,
-        max_exposure=AGENT_BUDGET,
-    )
-    beta_agent.executor = Executor(
-        beta_agent.state,
-        strategy_state=beta_agent.strategy_state,
+    # Initialize executor
+    claude_agent.executor = Executor(
+        claude_agent.state,
+        strategy_state=claude_agent.strategy_state,
         max_exposure=AGENT_BUDGET,
     )
 
     emit_event(
-        None, "info", "Competition started",
-        f"Alpha (v2) vs Beta (v1) | ${AGENT_BUDGET:.0f} each | DRY_RUN={'ON' if settings.DRY_RUN else 'OFF'}",
+        None, "info", "Claude (Opus) agent started",
+        f"Budget: ${AGENT_BUDGET:.0f} | DRY_RUN={'ON' if settings.DRY_RUN else 'OFF'}",
         icon="info", severity="info",
     )
 
@@ -427,16 +374,19 @@ async def bot_loop() -> None:
             else:
                 emit_event(None, "scan", "No live 5M markets right now", "Waiting for next 5-minute window...", icon="scan", severity="info")
 
-            # ── 2. Fetch raw positions (shared API call) ──
+            # ── 2. Fetch real Polymarket data (positions + trades) ──
+            global _polymarket_trades_cache
             raw_positions = fetch_raw_positions()
+            raw_trades = fetch_raw_trades()
+            # Cache ALL wallet trades (PnL is computed per-market on read)
+            _polymarket_trades_cache = raw_trades
 
-            # ── 3. Run both agents (errors are per-agent, don't kill the loop) ──
-            for agent in [alpha_agent, beta_agent]:
-                try:
-                    await run_agent_cycle(agent, live_5m, raw_positions)
-                except Exception as agent_err:
-                    logger.error(f"[{agent.agent_id}] cycle error: {agent_err}", exc_info=True)
-                    emit_event(agent, "error", "Cycle error", str(agent_err)[:100], icon="error", severity="error")
+            # ── 3. Run Claude agent ──
+            try:
+                await run_agent_cycle(claude_agent, live_5m, raw_positions, raw_trades)
+            except Exception as agent_err:
+                logger.error(f"[claude] cycle error: {agent_err}", exc_info=True)
+                emit_event(claude_agent, "error", "Cycle error", str(agent_err)[:100], icon="error", severity="error")
 
             # ── 4. Broadcast competition state (always runs) ──
             comp_state = build_competition_state()
@@ -600,18 +550,16 @@ async def get_markets():
 
 @app.get("/api/agent/{agent_id}/positions")
 async def get_agent_positions(agent_id: str):
-    agent = alpha_agent if agent_id == "alpha" else beta_agent
-    if not agent:
+    if not claude_agent:
         return []
-    return [p.model_dump() for p in agent.state.positions]
+    return [p.model_dump() for p in claude_agent.state.positions]
 
 
 @app.get("/api/agent/{agent_id}/metrics")
 async def get_agent_metrics(agent_id: str):
-    agent = alpha_agent if agent_id == "alpha" else beta_agent
-    if not agent:
+    if not claude_agent:
         return {}
-    return agent.state.metrics.model_dump()
+    return claude_agent.state.metrics.model_dump()
 
 
 @app.get("/api/status")
@@ -628,11 +576,16 @@ async def get_pnl_history(agent_id: str, limit: int = 500):
     return {"agent": agent_id, "snapshots": data}
 
 
+@app.get("/api/claude/stats")
+async def get_claude_stats():
+    """Return Claude agent API usage stats."""
+    return claude_strategy.stats
+
+
 @app.get("/api/polymarket/trades")
 async def get_polymarket_trades():
-    """Fetch actual trades from Polymarket Data API."""
-    trades = polymarket.get_trades()
-    return {"trades": trades}
+    """Return cached real Polymarket trades."""
+    return {"trades": _get_polymarket_trades()}
 
 
 @app.post("/api/bot/start")

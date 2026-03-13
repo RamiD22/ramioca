@@ -118,21 +118,28 @@ export interface PnLSnapshot {
   total_trades: number
 }
 
-export interface PolymarketTrade {
-  id: string
-  market: string
-  asset_id: string
+export interface PolymarketTradeEntry {
   side: "BUY" | "SELL"
-  size: string
-  price: string
-  status: string
-  match_time: string
-  outcome: string
+  shares: number
+  price: number
+  usdc: number
+  timestamp: number
+  transactionHash: string
+}
+
+export interface PolymarketPosition {
   title: string
-  transaction_hash: string
-  type: string
-  fee_rate_bps: string
-  created_at: string
+  outcome: string
+  slug: string
+  total_cost: number
+  total_revenue: number
+  net_shares: number
+  avg_entry: number
+  pnl: number
+  status: "open" | "closed"
+  trade_count: number
+  last_trade_time: number
+  trades: PolymarketTradeEntry[]
 }
 
 export interface CompetitionState {
@@ -140,5 +147,5 @@ export interface CompetitionState {
   beta: AgentState
   bot_status: BotStatus
   markets: MarketInfo[]
-  polymarket_trades: PolymarketTrade[]
+  polymarket_trades: PolymarketPosition[]
 }

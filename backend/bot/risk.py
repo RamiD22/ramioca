@@ -80,23 +80,11 @@ def calculate_position_size(
 
     kelly = (odds * win_prob - (1 - win_prob)) / odds
 
-    # Fractional Kelly — targeting ~8% of portfolio per trade
-    # Bumped fractions to size up with window-delta-driven conviction
-    if edge > 0.12:
-        fraction = kelly * 0.50  # strong conviction — size up
-    elif edge > 0.08:
-        fraction = kelly * 0.42  # solid edge
-    elif edge > 0.05:
-        fraction = kelly * 0.35  # moderate bet
-    elif edge > 0.03:
-        fraction = kelly * 0.25  # decent bet
-    else:
-        fraction = kelly * 0.18  # small bet for marginal edges
-
-    fraction = max(fraction, 0)
+    # Fixed 1% of balance per trade — keep trades small
+    fraction = 0.01
 
     size = balance * fraction
-    # Cap by clip size
+    # Cap by clip size (hard per-trade max)
     size = min(size, settings.CLIP_SIZE)
     # Cap by per-market max
     size = min(size, settings.MAX_POSITION_SIZE)
@@ -104,19 +92,11 @@ def calculate_position_size(
     size = min(size, remaining)
     size = round(size, 2)
 
-    # Minimum trade size: $20 for decent edges (targets ~8% of $250 budget)
-    # Rounds up small Kelly outputs so we're not placing dust orders
-    if size < 20.0:
-        if size >= 3.0 and edge >= 0.03:
-            size = 20.0  # Round up to 8% minimum
-        elif size >= 1.0 and edge >= 0.05:
-            size = 20.0  # Strong edge deserves at least minimum size
-        else:
-            return 0.0
+    if size < 1.0:
+        return 0.0
 
     logger.info(
-        f"Size: ${size:.2f} | edge={edge:.3f} kelly={kelly:.3f} "
-        f"frac={fraction:.3f} clip=${settings.CLIP_SIZE}"
+        f"Size: ${size:.2f} | edge={edge:.3f} clip=${settings.CLIP_SIZE}"
     )
     return size
 

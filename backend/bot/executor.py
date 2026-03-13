@@ -98,29 +98,28 @@ class Executor:
             f"{signal.market[:55]}"
         )
 
-        # ── Pre-flight: verify order book price is sane ──
-        # The strategy uses Gamma API prices which can lag behind the CLOB.
-        # If the real order book price diverges by >25% from our signal, abort.
+        # ── Pre-flight: use fresh order book price for execution ──
+        # The signal price may be stale (Opus takes 5-18s to respond).
+        # Always use the live CLOB price for execution decisions.
         try:
             book_price = polymarket.get_price(signal.token_id, "BUY")
             if book_price and book_price > 0:
-                divergence = abs(book_price - price) / max(price, 0.01)
-                if divergence > 0.25:
-                    logger.warning(
-                        f"Order book price {book_price:.4f} diverges {divergence:.0%} from "
-                        f"signal price {price:.4f} — skipping stale signal"
-                    )
-                    return None
-                # Also hard-reject if book price itself is at extremes
+                # Hard-reject if book price is at extremes (no edge possible)
                 if book_price > settings.MAX_PRICE or book_price < settings.MIN_PRICE:
                     logger.warning(
                         f"Order book price {book_price:.4f} outside "
-                        f"[{settings.MIN_PRICE}, {settings.MAX_PRICE}] — skipping"
+                        f"[{settings.MIN_PRICE}, {settings.MAX_PRICE}] — no edge, skipping"
                     )
                     return None
+                # Use the fresh book price for execution
+                if abs(book_price - price) / max(price, 0.01) > 0.05:
+                    logger.info(
+                        f"Updating execution price: {price:.4f} → {book_price:.4f} (fresh CLOB)"
+                    )
+                    price = book_price
         except Exception as e:
             logger.warning(f"Pre-flight price check failed: {e}")
-            # Continue — the client.py price guard will catch it
+            # Continue with signal price — the client.py price guard will catch it
 
         result = None
         try:

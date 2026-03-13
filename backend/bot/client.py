@@ -224,14 +224,22 @@ class PolymarketClient:
             aggressive_price = max(best_price - 0.04, 0.01)
 
         # Safety guard: reject if the actual order book price is outside tradeable range.
-        # The strategy signal might estimate 0.50 but the book could be at 0.95 for
-        # resolved/illiquid markets. Don't overpay.
-        if aggressive_price > settings.MAX_PRICE or aggressive_price < settings.MIN_PRICE:
-            logger.warning(
-                f"Order book price {aggressive_price:.4f} outside "
-                f"[{settings.MIN_PRICE}, {settings.MAX_PRICE}] — rejecting"
-            )
-            return None
+        # BUY orders: block overpaying (>MAX) or buying garbage (<MIN).
+        # SELL orders: only block selling for pennies (<MIN). High sell prices are
+        # take-profit exits — we WANT to sell at 0.90+.
+        if side == "BUY":
+            if aggressive_price > settings.MAX_PRICE or aggressive_price < settings.MIN_PRICE:
+                logger.warning(
+                    f"BUY price {aggressive_price:.4f} outside "
+                    f"[{settings.MIN_PRICE}, {settings.MAX_PRICE}] — rejecting"
+                )
+                return None
+        else:
+            if aggressive_price < settings.MIN_PRICE:
+                logger.warning(
+                    f"SELL price {aggressive_price:.4f} below {settings.MIN_PRICE} — rejecting"
+                )
+                return None
 
         # Convert USDC amount to shares (integer shares for clean rounding)
         shares = int(amount / aggressive_price)

@@ -1,7 +1,9 @@
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
+_env_path = Path(__file__).resolve().parent.parent / ".env"
+load_dotenv(_env_path, override=True)
 
 
 class Settings:
@@ -18,12 +20,12 @@ class Settings:
     SIGNATURE_TYPE: int = int(os.getenv("POLYMARKET_SIGNATURE_TYPE", "1"))
 
     # Risk parameters — pulled from your existing config
-    MAX_POSITION_SIZE: float = float(os.getenv("POLYMARKET_AGENT_MAX_MARKET_USDC", "55"))
+    MAX_POSITION_SIZE: float = float(os.getenv("POLYMARKET_AGENT_MAX_MARKET_USDC", "10"))
     MAX_TOTAL_EXPOSURE: float = float(os.getenv("POLYMARKET_AGENT_BUDGET_USDC", "200"))
     STOP_LOSS_PCT: float = float(os.getenv("POLYMARKET_AGENT_STOP_LOSS_PCT", "8")) / 100
     TAKE_PROFIT_PCT: float = float(os.getenv("POLYMARKET_AGENT_TAKE_PROFIT_PCT", "12")) / 100
     MAX_POSITIONS: int = int(os.getenv("POLYMARKET_AGENT_MAX_POSITIONS", "4"))
-    CLIP_SIZE: float = float(os.getenv("POLYMARKET_AGENT_CLIP_USDC", "22"))
+    CLIP_SIZE: float = float(os.getenv("POLYMARKET_AGENT_CLIP_USDC", "5"))
     DAILY_LOSS_LIMIT: float = float(os.getenv("POLYMARKET_AGENT_DAILY_LOSS_USDC", "15"))
 
     # Signal thresholds
@@ -37,6 +39,9 @@ class Settings:
     POLL_INTERVAL: int = int(os.getenv("POLYMARKET_AGENT_INTERVAL_SECONDS", "2"))
     DRY_RUN: bool = os.getenv("DRY_RUN", "true").lower() == "true"
     AUTOTRADE: bool = os.getenv("POLYMARKET_AGENT_AUTOTRADE", "true").lower() == "true"
+
+    # Anthropic (for Claude-powered trading agent)
+    ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
 
     # Supabase (optional — bot works without it)
     SUPABASE_URL: str = os.getenv("SUPABASE_URL", "")
